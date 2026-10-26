@@ -19,13 +19,13 @@
   "boards": [
     {
       "name": "front",
-      "identifier": "front-support-v1",
-      "marker_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      "identifier": "front-support-v2",
+      "marker_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     },
     {
       "name": "rear",
-      "identifier": "rear-support-v1",
-      "marker_ids": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      "identifier": "rear-support-v2",
+      "marker_ids": [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     }
   ]
 }
