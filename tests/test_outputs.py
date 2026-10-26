@@ -42,7 +42,7 @@ def test_png_geometry_and_synthetic_detection(artifacts, index):
     assert abs(metrics["square_rounding_px"]) <= 0.5
     result = report["boards"][index]
     assert result["passed"]
-    assert result["detected_marker_ids"] == list(range(index * 10, index * 10 + 10))
+    assert result["detected_marker_ids"] == list(range(index * 10 + 1, index * 10 + 11))
     assert result["detected_charuco_ids"] == list(range(12))
     assert all(v for k, v in result["synthetic_checks"].items() if k.endswith("match") or k.endswith("clear"))
 

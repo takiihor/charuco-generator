@@ -22,8 +22,8 @@ def test_default_dimensions_and_internal_metres(config):
 
 def test_ids_and_placement(config):
     front, rear = (create_board(config.geometry, b) for b in config.boards)
-    assert front.getIds().tolist() == list(range(10))
-    assert rear.getIds().tolist() == list(range(10, 20))
+    assert front.getIds().tolist() == list(range(1, 11))
+    assert rear.getIds().tolist() == list(range(11, 21))
     assert not set(front.getIds()) & set(rear.getIds())
     assert len(front.getObjPoints()) == 10
     # IDs are assigned row-major to white cells: first marker is in column 1, row 0.
@@ -61,9 +61,9 @@ def test_invalid_parameters_rejected(config, section, key, value):
 def test_invalid_board_configuration(config, case):
     data = config.to_dict()
     if case == "within_board":
-        data["boards"][0]["marker_ids"][1] = 0
+        data["boards"][0]["marker_ids"][1] = data["boards"][0]["marker_ids"][0]
     elif case == "across_boards":
-        data["boards"][1]["marker_ids"][0] = 0
+        data["boards"][1]["marker_ids"][0] = data["boards"][0]["marker_ids"][0]
     elif case == "count":
         data["boards"][0]["marker_ids"].pop()
     elif case in ("negative", "capacity", "bool"):

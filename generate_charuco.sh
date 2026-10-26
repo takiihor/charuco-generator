@@ -30,7 +30,7 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     fi
     if [[ -z "$SELECTED_PYTHON" ]]; then
         printf 'Error: install Python 3.11+ with venv support, then run this script again.\n' >&2
-        printf 'You can choose an interpreter with PYTHON_BIN=/path/to/python ./start.sh\n' >&2
+        printf 'You can choose an interpreter with PYTHON_BIN=/path/to/python ./generate_charuco.sh\n' >&2
         exit 1
     fi
     printf 'Creating isolated environment with %s...\n' "$SELECTED_PYTHON"
@@ -85,7 +85,7 @@ if [[ $# -eq 0 ]]; then
         set -- generate --config config/boards.json
     fi
 elif [[ "$1" == -* && "$1" != "--help" && "$1" != "-h" ]]; then
-    # Convenience: ./start.sh --output-dir output/custom
+    # Convenience: ./generate_charuco.sh --output-dir output/custom
     set -- generate "$@"
 fi
 

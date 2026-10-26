@@ -1,6 +1,6 @@
 # Precision ChArUco board generator
 
-Generate distinct Front and Rear references for camera calibration and future industrial localization. The defaults use OpenCV `DICT_5X5_100`, a 5 x 4 chessboard, 20 mm squares and 14 mm markers. Each pattern is nominally **100 x 80 mm**. Front encodes IDs **0-9**; Rear encodes **10-19**. Both have 10 markers and 12 internal ChArUco intersections.
+Generate distinct Front and Rear references for camera calibration and future industrial localization. The defaults use OpenCV `DICT_5X5_100`, a 5 x 4 chessboard, 20 mm squares and 14 mm markers. Each pattern is nominally **100 x 80 mm**. Front encodes IDs **1-10**; Rear encodes **11-20**. Both have 10 markers and 12 internal ChArUco intersections.
 
 The utility generates lossless PNGs, actual-size **vector PDFs**, a reconstruction manifest, and a machine-readable validation report. It reads the saved files back, reconstructs the boards and validates them before publishing the outputs. No robot motion, UR control, hand-eye calibration or placement logic is implemented.
 
@@ -11,23 +11,24 @@ The utility generates lossless PNGs, actual-size **vector PDFs**, a reconstructi
 On Linux or macOS, start the guided terminal menu with:
 
 ```bash
-./start.sh
+./generate_charuco.sh
 ```
 
 The normal menu asks only:
 
 1. Select Front, Rear, or both (enter numbers or names).
 2. Enter the overall pattern size in mm, such as `30x30`, `90x90` or `100x80`.
-3. Review the result and confirm generation.
+3. Choose the marker IDs (default: keep configured IDs).
+4. Review the result and confirm generation.
 
 The size is the complete black-and-white pattern, excluding the external white margin. A `30x30` mm pattern uses a 3 x 3 grid with 10 mm squares and 7 mm markers; `90x90` uses 3 x 3 with 30 mm squares and 21 mm markers. Grid and marker sizing are automatic. For rectangular patterns, the grid follows the requested proportions with equal square dimensions; matching the configured proportions preserves the configured grid. Dimensions that cannot fit the configured page, dictionary or raster limits are rejected at the size prompt.
 
-Press Enter to accept a default, or Ctrl+C to cancel. New unused marker IDs and a fresh save folder are chosen automatically. With the supplied configuration, outputs and default 100 x 80 mm size, the first new set uses Front **20-29** and Rear **30-39**. A later run automatically skips saved IDs. Each menu run saves to a separate folder such as `output/front_20-29_rear_30-39/`, preserving earlier sets. The source JSON is unchanged; the saved manifest contains the exact configuration used.
+Press Enter to accept a default, or Ctrl+C to cancel. Marker IDs default to the configured IDs (Front **1-10**, Rear **11-20**); option **1** chooses the next unused ID block, and option **3** chooses the first ID manually. If the configured IDs do not fit the chosen grid (for example a `30x30` pattern has only 4 markers), the menu reports the mismatch and asks the ID option again. A fresh save folder is chosen automatically, so each menu run preserves earlier sets, for example `output/front_1-10_rear_11-20/` or `output/front_28-37_rear_38-47/`. The source JSON is unchanged; the saved manifest contains the exact configuration used.
 
 For detailed control, run:
 
 ```bash
-./start.sh menu --advanced
+./generate_charuco.sh menu --advanced
 ```
 
 Advanced mode lets you enter the grid as one value such as `3x3`, square and marker sizes, dictionary, paper, DPI, ID mode and save folder. Invalid entries are corrected at the same prompt. Existing CLI flags remain available for scripted generation.
@@ -39,26 +40,26 @@ The launcher finds Python 3.11+, creates `.venv` when needed, and installs the p
 For one-command generation without the menu:
 
 ```bash
-./start.sh generate                                      # Configured Front and Rear IDs
-./start.sh --select rear --start-id 40 --output-dir output/rear40
-./start.sh --start-id 20 --output-dir output/set2          # Front 20-29, Rear 30-39
+./generate_charuco.sh generate                        # Configured Front and Rear IDs
+./generate_charuco.sh --select rear --start-id 40 --output-dir output/rear40
+./generate_charuco.sh --start-id 20 --output-dir output/set2   # Front 20-29, Rear 30-39
 ```
 
 `--select` controls which boards are generated. `--start-id` calculates the required count from the layout and assigns consecutive, nonoverlapping ranges in configuration order. It also creates new reference identifiers; IDs outside the dictionary are rejected. It does not search saved outputs: use the menu's **new unused IDs** option for that. Explicit `--marker-ids` lists/ranges remain available and cannot be combined with `--start-id`.
 
-With redirected input, a bare `./start.sh` retains the original automatic generation behavior. Use `./start.sh menu` to request the menu explicitly, or `./start.sh menu --output-dir output/project2` to choose another output root. The Python entry point also supports `python generate.py menu`.
+With redirected input, a bare `./generate_charuco.sh` retains the original automatic generation behavior. Use `./generate_charuco.sh menu` to request the menu explicitly, or `./generate_charuco.sh menu --output-dir output/project2` to choose another output root. The Python entry point also supports `python generate.py menu`.
 
 Pass existing CLI commands or generation options directly:
 
 ```bash
-./start.sh --output-dir output/custom
-./start.sh generate --config config/boards.json --dpi 300
-./start.sh validate --input captured_photo.png --board front
-./start.sh verify --manifest output/board_manifest.json
-./start.sh --help
+./generate_charuco.sh --output-dir output/custom
+./generate_charuco.sh generate --config config/boards.json --dpi 300
+./generate_charuco.sh validate --input captured_photo.png --board front
+./generate_charuco.sh verify --manifest output/board_manifest.json
+./generate_charuco.sh --help
 ```
 
-Relative input/config/output paths passed to the launcher are resolved from the project directory. Use absolute paths for files elsewhere. To select Python when creating a new environment, use `PYTHON_BIN=/path/to/python3.12 ./start.sh`. An existing environment is reused; move it aside first if you want to change its interpreter.
+Relative input/config/output paths passed to the launcher are resolved from the project directory. Use absolute paths for files elsewhere. To select Python when creating a new environment, use `PYTHON_BIN=/path/to/python3.12 ./generate_charuco.sh`. An existing environment is reused; move it aside first if you want to change its interpreter.
 
 For manual installation or Windows, follow the steps below.
 
@@ -101,7 +102,7 @@ output/
 tests/                       Configuration, detection, printing and CLI checks
 requirements.txt
 generate.py
-start.sh                     Install dependencies and run the CLI
+generate_charuco.sh          Install dependencies and run the CLI
 ```
 
 PNG files intentionally contain only the pattern and white margin. The print PDFs include identification labels and a 50 mm reference line **outside** the pattern and its white margin. Print the PDFs for the most reliable dimension handling. No cutting guides or decorative borders are drawn near the pattern.

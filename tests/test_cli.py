@@ -71,5 +71,5 @@ def test_standalone_entrypoint_exit_codes(artifacts):
     good = subprocess.run([*args, "rear"], cwd=ROOT, capture_output=True, text=True)
     wrong = subprocess.run([*args, "front"], cwd=ROOT, capture_output=True, text=True)
     assert good.returncode == 0
-    assert json.loads(good.stdout)["detected_marker_ids"] == list(range(10, 20))
+    assert json.loads(good.stdout)["detected_marker_ids"] == list(range(11, 21))
     assert wrong.returncode == 1

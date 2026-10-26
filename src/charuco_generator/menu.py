@@ -93,7 +93,7 @@ def _pattern_size(value, data):
         geometry["squares_x"], geometry["squares_y"] = columns * factor, rows * factor
     if max(geometry["squares_x"], geometry["squares_y"]) > 100:
         raise ConfigError("Use a simpler width-to-height ratio, e.g. 30x30, 100x80 or 120x80; "
-                          "custom grids are available with ./start.sh menu --advanced.")
+                          "custom grids are available with ./generate_charuco.sh menu --advanced.")
     geometry["square_length_mm"] = float(width / geometry["squares_x"])
     geometry["marker_length_mm"] = geometry["square_length_mm"] * 0.7
     probe = {**data, "geometry": geometry, "boards": [b.copy() for b in data["boards"]]}
@@ -149,11 +149,10 @@ def configure(config_path: str, output_root: str | None = None, *, advanced: boo
         data["geometry"] = _ask("Pattern size in mm (width x height)", f"{width:g}x{height:g}",
                                 lambda value: _pattern_size(value, data))
 
+    id_default = "1" if advanced else "2"
     while True:
-        mode = "1"
-        if advanced:
-            print("\nMarker IDs: 1 = new unused IDs, 2 = keep configured IDs, 3 = choose first ID")
-            mode = _choice("ID option", "1", ("1", "2", "3"))
+        print("\nMarker IDs: 1 = new unused IDs, 2 = keep configured IDs, 3 = choose first ID")
+        mode = _choice("ID option", id_default, ("1", "2", "3"))
         try:
             if mode == "1":
                 print(f"Checking configured IDs and saved manifests under {root}...")
@@ -171,7 +170,9 @@ def configure(config_path: str, output_root: str | None = None, *, advanced: boo
             break
         except ConfigError as exc:
             if not advanced:
-                raise ConfigError(f"{exc} For more options, run ./start.sh menu --advanced.") from exc
+                print(f"  {exc}")
+                print("  Choose another ID option (3 = choose first ID), or run ./generate_charuco.sh menu --advanced.")
+                continue
             print(f"  {exc}")
             if _choice("Settings: 1 = keep, 2 = customize", "1", ("1", "2")) == "2":
                 _customize(data)

@@ -20,7 +20,7 @@ def answers(monkeypatch, values):
 def test_menu_generates_new_sets_without_overwriting(monkeypatch, tmp_path):
     original = CONFIG_PATH.read_bytes()
     for _ in range(2):
-        answers(monkeypatch, [""] * 3)
+        answers(monkeypatch, ["", "", "1", ""])
         assert main(["menu", "--config", str(CONFIG_PATH), "--output-dir", str(tmp_path)]) == 0
     manifests = sorted(tmp_path.rglob("board_manifest.json"))
     assert len(manifests) == 2
@@ -30,7 +30,7 @@ def test_menu_generates_new_sets_without_overwriting(monkeypatch, tmp_path):
         encoded.append({marker for board in manifest["boards"] for marker in board["marker_ids"]})
         assert (path.parent / manifest["combined_pdf"]).is_file()
         assert main(["verify", "--manifest", str(path)]) == 0
-    assert encoded == [set(range(20, 40)), set(range(40, 60))]
+    assert encoded == [set(range(21, 41)), set(range(41, 61))]
     assert CONFIG_PATH.read_bytes() == original
 
 
@@ -38,7 +38,7 @@ def test_menu_selects_only_rear_and_keeps_ids(monkeypatch, tmp_path):
     answers(monkeypatch, ["invalid", "2", "", "", "", "", "", "", "2", "", "y"])
     config = configure(str(CONFIG_PATH), str(tmp_path), advanced=True)
     assert [board.name for board in config.boards] == ["rear"]
-    assert config.boards[0].marker_ids == tuple(range(10, 20))
+    assert config.boards[0].marker_ids == tuple(range(11, 21))
     assert not tmp_path.joinpath("rear_10-19").exists()
 
 
@@ -47,8 +47,8 @@ def test_menu_custom_geometry_recomputes_id_count(monkeypatch, tmp_path):
                           "1", "", "y"])
     config = configure(str(CONFIG_PATH), str(tmp_path), advanced=True)
     assert config.geometry.squares_x == 6
-    assert config.boards[0].marker_ids == tuple(range(20, 32))
-    assert config.boards[1].marker_ids == tuple(range(32, 44))
+    assert config.boards[0].marker_ids == tuple(range(21, 33))
+    assert config.boards[1].marker_ids == tuple(range(33, 45))
 
 
 def test_menu_manual_ids_and_cancel(monkeypatch, tmp_path):
@@ -57,9 +57,23 @@ def test_menu_manual_ids_and_cancel(monkeypatch, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+def test_simple_menu_keeps_configured_ids_by_default(monkeypatch, tmp_path):
+    answers(monkeypatch, ["front", "", "", "y"])
+    config = configure(str(CONFIG_PATH), str(tmp_path))
+    assert config.boards[0].marker_ids == tuple(range(1, 11))
+    assert config.boards[0].identifier == "front-support-v2"
+
+
+def test_simple_menu_id_count_mismatch_retries(monkeypatch, tmp_path, capsys):
+    answers(monkeypatch, ["front", "30x30", "", "3", "1", "y"])
+    config = configure(str(CONFIG_PATH), str(tmp_path))
+    assert config.boards[0].marker_ids == (1, 2, 3, 4)
+    assert "expected 4 marker IDs, got 10" in capsys.readouterr().out
+
+
 def test_simple_menu_generates_30mm_square_pattern(monkeypatch, tmp_path, capsys):
     prompts = []
-    responses = iter(["all", "30x30", "y"])
+    responses = iter(["all", "30x30", "1", "y"])
 
     def respond(prompt):
         prompts.append(prompt)
@@ -67,7 +81,7 @@ def test_simple_menu_generates_30mm_square_pattern(monkeypatch, tmp_path, capsys
 
     monkeypatch.setattr("builtins.input", respond)
     assert main(["menu", "--output-dir", str(tmp_path)]) == 0, capsys.readouterr()
-    assert len(prompts) == 3
+    assert len(prompts) == 4
     path, = tmp_path.rglob("board_manifest.json")
     manifest = json.loads(path.read_text())
     geometry = manifest["configuration"]["geometry"]
@@ -75,11 +89,11 @@ def test_simple_menu_generates_30mm_square_pattern(monkeypatch, tmp_path, capsys
     assert geometry["square_length_mm"] == 10
     assert geometry["marker_length_mm"] == 7
     assert [b["pattern_dimensions_mm"] for b in manifest["boards"]] == [[30, 30], [30, 30]]
-    assert [b["marker_ids"] for b in manifest["boards"]] == [list(range(20, 24)), list(range(24, 28))]
+    assert [b["marker_ids"] for b in manifest["boards"]] == [list(range(21, 25)), list(range(25, 29))]
 
 
 def test_simple_menu_retries_only_pattern_size(monkeypatch, tmp_path, capsys):
-    answers(monkeypatch, ["front", "invalid", "0x30", "3x3", "300x300", "90x90", "y"])
+    answers(monkeypatch, ["front", "invalid", "0x30", "3x3", "300x300", "90x90", "1", "y"])
     config = configure(str(CONFIG_PATH), str(tmp_path))
     assert config.geometry.pattern_mm == (90, 90)
     assert config.geometry.marker_length_mm == 21
@@ -92,7 +106,7 @@ def test_simple_menu_retries_only_pattern_size(monkeypatch, tmp_path, capsys):
 
 
 def test_simple_menu_resizes_rectangular_pattern(monkeypatch, tmp_path):
-    answers(monkeypatch, ["front", "120 × 80 mm", "y"])
+    answers(monkeypatch, ["front", "120 × 80 mm", "1", "y"])
     config = configure(str(CONFIG_PATH), str(tmp_path))
     assert config.geometry.pattern_mm == (120, 80)
     assert (config.geometry.squares_x, config.geometry.squares_y) == (6, 4)
@@ -126,7 +140,7 @@ def test_next_ids_respects_dictionary_and_saved_nonconsecutive_ids(config, tmp_p
     assert next_ids(config, config.to_dict(), tmp_path) == 46
     saved["geometry"]["dictionary"] = "DICT_4X4_100"
     tmp_path.joinpath("board_manifest.json").write_text(json.dumps({"configuration": saved}))
-    assert next_ids(config, config.to_dict(), tmp_path) == 20
+    assert next_ids(config, config.to_dict(), tmp_path) == 21
 
 
 def test_next_ids_fails_on_corrupt_manifest(config, tmp_path):
