@@ -8,7 +8,7 @@ import sys
 import cv2
 
 from .board import create_board, layout_record, reconstruct_board, sha256
-from .config import ConfigError, config_from_dict, load_config
+from .config import ConfigError, Printing, config_from_dict, load_config
 from .generator import generate, write_json
 from .render import raster_metrics
 from .selection import assign_ids, select_boards
@@ -68,7 +68,7 @@ def _overrides(config, args):
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="Actual-size ChArUco board generator and detector")
+    root = argparse.ArgumentParser(description="Actual-size ChArUco board and ArUco marker generator")
     commands = root.add_subparsers(dest="command", required=True)
     menu = commands.add_parser("menu", help="Choose boards, settings and IDs in a guided terminal menu")
     menu.add_argument("--config", default="config/boards.json")
@@ -93,6 +93,16 @@ def parser() -> argparse.ArgumentParser:
     gen.add_argument("--white-margin-mm", type=float)
     gen.add_argument("--page-margin-mm", type=float)
     gen.add_argument("--output-dir")
+    aruco = commands.add_parser("aruco", help="Generate standalone ArUco markers with IDs 1 through 20")
+    aruco.add_argument("--marker-size-mm", "--marker-length-mm", dest="marker_length_mm", type=float, default=30.0,
+                       help="Marker side including its black border, excluding white margin (default: 30 mm)")
+    aruco.add_argument("--dictionary", default="DICT_5X5_100")
+    aruco.add_argument("--border-bits", type=int, default=1)
+    aruco.add_argument("--dpi", type=int, default=600)
+    aruco.add_argument("--page-size", default="A4", help="A4, A3, LETTER or WIDTHxHEIGHT in mm")
+    aruco.add_argument("--white-margin-mm", type=float, default=10.0)
+    aruco.add_argument("--page-margin-mm", type=float, default=10.0)
+    aruco.add_argument("--output-dir", default="output/aruco")
     val = commands.add_parser("validate", help="Report marker/corner detection in a PNG or printed-board photograph")
     val.add_argument("--input", required=True)
     val.add_argument("--board", required=True)
@@ -104,7 +114,7 @@ def parser() -> argparse.ArgumentParser:
     mode.add_argument("--photo", action="store_true", help="Force photograph mode; allow partial visibility")
     val.add_argument("--require-complete", action="store_true", help="Require all markers/corners in a photograph")
     val.add_argument("--report", help="Also save JSON report to this path")
-    verify = commands.add_parser("verify", help="Recheck every generated artifact, PDF geometry and checksum")
+    verify = commands.add_parser("verify", help="Recheck ChArUco or ArUco artifacts, PDF geometry and checksums")
     verify.add_argument("--manifest", default="output/board_manifest.json")
     verify.add_argument("--report")
     return root
@@ -116,6 +126,15 @@ def main(argv: list[str] | None = None) -> int:
         argv = ["menu"] if sys.stdin.isatty() else ["generate"]
     args = parser().parse_args(argv)
     try:
+        if args.command == "aruco":
+            from .aruco import ArucoConfig, generate_aruco
+            config = ArucoConfig(args.dictionary, args.marker_length_mm, args.border_bits,
+                                 Printing(args.dpi, args.page_size, args.white_margin_mm, args.page_margin_mm))
+            generate_aruco(config, args.output_dir)
+            print(f"Generated 20 verified ArUco markers (IDs 1-20) in {Path(args.output_dir).resolve()}")
+            print(f"Dictionary: {config.dictionary}; marker size: {config.marker_length_mm:g} x {config.marker_length_mm:g} mm")
+            print("Print the PDFs at Actual size / 100% and measure the printed dimensions.")
+            return 0
         if args.command in ("generate", "menu"):
             if args.command == "menu":
                 from .menu import configure
@@ -134,7 +153,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verify":
             path = Path(args.manifest)
             manifest = load_manifest(path)
-            report = validate_artifacts(path.parent, manifest)
+            if manifest.get("kind") == "aruco":
+                from .aruco import validate_aruco_artifacts
+                report = validate_aruco_artifacts(path.parent, manifest)
+            else:
+                report = validate_artifacts(path.parent, manifest)
             report["manifest_sha256"] = sha256(path)
         else:
             manifest_path = Path(args.manifest or "output/board_manifest.json")

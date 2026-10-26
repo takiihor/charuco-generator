@@ -10,7 +10,7 @@ from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream
 
 from .board import reconstruct_board, sha256
-from .config import BoardSpec, ConfigError, Geometry, config_from_dict, page_size_mm
+from .config import ConfigError, Geometry, config_from_dict, page_size_mm
 from .render import pattern_rectangles_mm, plan_pages, raster_metrics
 
 MM_TO_PT = 72.0 / 25.4
@@ -139,7 +139,14 @@ def _matrix(values) -> np.ndarray:
 def validate_pdf(path: str | Path, manifest: dict, expected_placements: list[dict]) -> dict:
     """Inspect actual MediaBox, form rectangles, BBox and placement CTMs, not metadata claims."""
     config = config_from_dict(manifest["configuration"])
-    page_mm = page_size_mm(config.printing.page_size)
+    rectangles = {spec.name: pattern_rectangles_mm(config.geometry, spec, reconstruct_board(manifest, spec.name))
+                  for spec in config.boards}
+    return validate_vector_pdf(path, page_size_mm(config.printing.page_size), expected_placements, rectangles)
+
+
+def validate_vector_pdf(path: str | Path, page_mm: tuple[float, float],
+                        expected_placements: list[dict], rectangles: dict) -> dict:
+    """Check physical PDF geometry for either boards or standalone marker forms."""
     reader = PdfReader(path)
     failures = []
     observed = []
@@ -194,17 +201,14 @@ def validate_pdf(path: str | Path, manifest: dict, expected_placements: list[dic
                 if page_index != placement["page"] or not np.allclose(bbox, [0, 0, w * MM_TO_PT, h * MM_TO_PT], rtol=0, atol=PDF_POINT_TOLERANCE):
                     failures.append(f"{name}: pattern bounding box/page differs from requested physical dimensions")
                 # Also check every actual pattern rectangle, including marker modules.
-                record = next(b for b in manifest["boards"] if b["name"] == placement["board"])
-                board = reconstruct_board(manifest, record["name"])
-                spec = BoardSpec(record["name"], record["identifier"], tuple(record["marker_ids"]))
                 rects = [[float(v) for v in args] for args, op in ContentStream(form, reader).operations if op == b"re"]
                 expected_rects = [[0, 0, w * MM_TO_PT, h * MM_TO_PT]] + [
-                    [v * MM_TO_PT for v in rect] for rect in pattern_rectangles_mm(config.geometry, spec, board)]
+                    [v * MM_TO_PT for v in rect] for rect in rectangles[placement["board"]]]
                 if len(rects) != len(expected_rects) or not np.allclose(rects, expected_rects, rtol=0, atol=PDF_POINT_TOLERANCE):
-                    failures.append(f"{name}: vector chessboard or marker module geometry differs")
+                    failures.append(f"{name}: vector pattern or marker module geometry differs")
                 origin = transform @ np.array([bbox[0], bbox[1], 1])
                 opposite = transform @ np.array([bbox[2], bbox[3], 1])
-                observed.append({"board": record["name"], "page": page_index,
+                observed.append({"board": placement["board"], "page": page_index,
                                  "pattern_bbox_mm_xywh": [float(v / MM_TO_PT) for v in [origin[0], origin[1], opposite[0] - origin[0], opposite[1] - origin[1]]],
                                  "vector_rectangle_count": len(rects)})
     if sorted((p["board"], p["page"]) for p in observed) != sorted((p["board"], p["page"]) for p in expected_placements):

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "precision-charuco-generator"
 version = "1.0.0"
-description = "Reconstructible ChArUco boards with actual-size vector PDFs and verified raster outputs"
+description = "ChArUco boards and standalone ArUco markers with actual-size vector PDFs and verified rasters"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 
