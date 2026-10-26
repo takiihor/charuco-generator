@@ -1,10 +1,45 @@
-# Precision ChArUco board generator
+# Precision ChArUco and ArUco generator
 
 Generate distinct Front and Rear references for camera calibration and future industrial localization. The defaults use OpenCV `DICT_5X5_100`, a 5 x 4 chessboard, 20 mm squares and 14 mm markers. Each pattern is nominally **100 x 80 mm**. Front encodes IDs **1-10**; Rear encodes **11-20**. Both have 10 markers and 12 internal ChArUco intersections.
 
 The utility generates lossless PNGs, actual-size **vector PDFs**, a reconstruction manifest, and a machine-readable validation report. It reads the saved files back, reconstructs the boards and validates them before publishing the outputs. No robot motion, UR control, hand-eye calibration or placement logic is implemented.
 
 **Successful detection does not establish printed dimensional accuracy or robot placement accuracy. No physical printed-board measurement has been performed for the supplied examples.**
+
+## Generate standalone ArUco markers 1-20
+
+On Linux or macOS, run:
+
+```bash
+./generate_aruco.sh
+```
+
+This generates exactly **20 standalone markers**, encoding IDs **1 through 20 inclusive**, using `DICT_5X5_100`. Each marker is **30 x 30 mm** including its black border, with a separate 10 mm white margin on every side. The script shares the ChArUco launcher's isolated environment and dependency installation, works from any directory, and runs without prompts.
+
+The default destination is `output/aruco/`:
+
+```text
+aruco_01.png ... aruco_20.png    Lossless marker images with clear white margins
+aruco_01.pdf ... aruco_20.pdf    Individual actual-size vector print sheets
+aruco_1-20_A4.pdf               All markers on multiple A4 sheets
+aruco_manifest.json            Dictionary, IDs, dimensions, raster metrics, layouts and hashes
+aruco_validation_report.json   Saved-image detection and PDF geometry checks
+```
+
+Choose the physical marker size and output folder with:
+
+```bash
+./generate_aruco.sh --marker-size-mm 40 --output-dir output/aruco_40mm
+./generate_aruco.sh --dictionary DICT_4X4_50 --dpi 300 --page-size A3
+./generate_aruco.sh --help
+./generate_charuco.sh verify --manifest output/aruco/aruco_manifest.json
+```
+
+Additional options are `--white-margin-mm`, `--page-margin-mm` and `--border-bits`. Marker IDs always remain **1-20**. For manual installation or Windows, use `python generate.py aruco` after installing the dependencies below. Relative launcher paths resolve from the project directory.
+
+The generator reads every saved PNG back and requires detection of exactly its expected ID, then checks the actual PDF vector dimensions before publishing. PNG sampling uses whole pixels per module; the manifest records the effective DPI. PDFs preserve the requested physical size, include ID labels and a 50 mm reference line outside the white margin, and add pages as needed. Print at **Actual size / 100%** and measure the result. Repeated runs replace the generated files in the selected directory; use a new `--output-dir` to keep earlier sets.
+
+The default standalone markers use the same dictionary and IDs as the default ChArUco boards. ArUco detection identifies matching dictionary/ID pairs identically on either type of print. Marker encoding follows the versioned [OpenCV ArUco generation API](https://docs.opencv.org/4.11.0/d5/dae/tutorial_aruco_detection.html).
 
 ## Install
 
