@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "geometry": {
+    "dictionary": "DICT_5X5_100",
+    "squares_x": 5,
+    "squares_y": 4,
+    "square_length_mm": 20.0,
+    "marker_length_mm": 14.0,
+    "legacy_pattern": false,
+    "border_bits": 1
+  },
+  "printing": {
+    "dpi": 600,
+    "page_size": "A4",
+    "white_margin_mm": 10.0,
+    "page_margin_mm": 10.0
+  },
+  "output_dir": "output",
+  "boards": [
+    {
+      "name": "front",
+      "identifier": "front-support-v1",
+      "marker_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    },
+    {
+      "name": "rear",
+      "identifier": "rear-support-v1",
+      "marker_ids": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    }
+  ]
+}
