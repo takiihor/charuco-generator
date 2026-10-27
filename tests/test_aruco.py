@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import sys
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -179,6 +180,8 @@ def test_every_printed_marker_decodes_from_vector_pdf(aruco_artifacts, tmp_path)
     assert sorted(detected) == list(range(1, 21))
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="The launcher is a POSIX shell script; Windows runs python generate.py directly")
 def test_shell_launcher_from_another_directory(tmp_path):
     output = tmp_path / "markers with spaces"
     result = subprocess.run([str(ROOT / "generate_aruco.sh"), "--marker-size-mm", "25", "--output-dir", str(output)],
