@@ -1,12 +1,18 @@
 """Simple terminal setup, with technical choices available in advanced mode."""
-from fractions import Fraction
 import math
-from pathlib import Path
 import re
+from fractions import Fraction
+from pathlib import Path
 
-from .config import ConfigError, Geometry, config_from_dict, dictionary_for, load_config, page_size_mm
+from .config import (
+    ConfigError,
+    config_from_dict,
+    dictionary_for,
+    load_config,
+    page_size_mm,
+)
 from .render import plan_pages, raster_metrics
-from .selection import assign_ids, next_ids, select_boards
+from .selection import assign_ids, ids_label, next_ids, select_boards
 
 
 def _ask(label, default, parse=str):
@@ -75,6 +81,19 @@ def _customize(data):
     printing["page_size"] = _ask("Paper (A4, A3, LETTER or WIDTHxHEIGHT mm)", printing["page_size"], paper)
     printing["dpi"] = _ask("PNG resolution in DPI", printing["dpi"], dpi)
 
+    def overlap(value):
+        try:
+            result = float(value)
+        except ValueError:
+            raise ValueError("Enter a number of millimetres from 0 to 100 (0 = never split a board).") from None
+        if not math.isfinite(result) or not 0 <= result <= 100:
+            raise ValueError("Enter a number of millimetres from 0 to 100 (0 = never split a board).")
+        return result
+
+    printing["tile_overlap_mm"] = _ask(
+        "Tile overlap in mm (0 = refuse to split a board that does not fit one page)",
+        printing.get("tile_overlap_mm", 0), overlap)
+
 
 def _pattern_size(value, data):
     """Convert overall pattern dimensions to a grid of equal-size squares."""
@@ -105,7 +124,7 @@ def _pattern_size(value, data):
 
 
 def _new_directory(root, boards):
-    label = "_".join(f"{b['name']}_{min(b['marker_ids'])}-{max(b['marker_ids'])}" for b in boards)
+    label = "_".join(f"{b['name']}_{ids_label(b['marker_ids'])}" for b in boards)
     path = root / label
     suffix = 2
     while path.exists():
@@ -114,7 +133,8 @@ def _new_directory(root, boards):
     return path
 
 
-def configure(config_path: str, output_root: str | None = None, *, advanced: bool = False):
+def configure(config_path: str, output_root: str | None = None, *, advanced: bool = False,
+              ignore_unreadable_manifests: bool = False):
     """Return a reviewed config, or None when cancelled; never edit the source config."""
     config = load_config(config_path)
     data = config.to_dict()
@@ -156,7 +176,11 @@ def configure(config_path: str, output_root: str | None = None, *, advanced: boo
         try:
             if mode == "1":
                 print(f"Checking configured IDs and saved manifests under {root}...")
-                assign_ids(data, next_ids(config, data, root))
+                id_warnings: list[str] = []
+                assign_ids(data, next_ids(config, data, root, ignore_unreadable=ignore_unreadable_manifests,
+                                          warnings=id_warnings))
+                for warning in id_warnings:
+                    print(f"  {warning}")
             elif mode == "3":
                 assign_ids(data, _ask("First marker ID (remaining IDs assigned automatically)", "0", int))
             else:

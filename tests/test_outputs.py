@@ -1,18 +1,27 @@
-from dataclasses import replace
+import itertools
 import shutil
 import subprocess
+from dataclasses import replace
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-import pytest
 
 from charuco_generator.board import reconstruct_board, sha256
-from charuco_generator.config import ConfigError
+from charuco_generator.config import ConfigError, Geometry
 from charuco_generator.generator import generate
 from charuco_generator.render import plan_pages, raster_metrics
-from charuco_generator.validation import ValidationError, validate_artifacts, validate_image, validate_pdf
+from charuco_generator.validation import (
+    ValidationError,
+    detector_parameters,
+    load_manifest,
+    unexpected_files,
+    validate_artifacts,
+    validate_image,
+    validate_pdf,
+)
 
 
 def test_generated_files_and_checksum_scope(artifacts):
@@ -44,7 +53,7 @@ def test_png_geometry_and_synthetic_detection(artifacts, index):
     assert result["passed"]
     assert result["detected_marker_ids"] == list(range(index * 10 + 1, index * 10 + 11))
     assert result["detected_charuco_ids"] == list(range(12))
-    assert all(v for k, v in result["synthetic_checks"].items() if k.endswith("match") or k.endswith("clear"))
+    assert all(v for k, v in result["synthetic_checks"].items() if k.endswith(("match", "clear")))
 
 
 @pytest.mark.parametrize("index", [0, 1])
@@ -109,7 +118,7 @@ def test_blank_missing_and_bad_geometry_fail(artifacts, tmp_path):
 
 
 def test_pdf_pattern_and_page_dimensions(artifacts):
-    directory, manifest, report = artifacts
+    directory, _, report = artifacts
     assert all(pdf["passed"] for pdf in report["pdfs"])
     combined = next(pdf for pdf in report["pdfs"] if pdf["input"] == "front_rear_A4.pdf")
     assert combined["page_count"] == 1
@@ -117,7 +126,9 @@ def test_pdf_pattern_and_page_dimensions(artifacts):
     assert len(combined["patterns"]) == 2
     for pattern in combined["patterns"]:
         assert pattern["pattern_bbox_mm_xywh"][2:] == pytest.approx([100, 80], abs=0.00005)
-    assert [r["length_mm"] for r in combined["reference_lines"]] == pytest.approx([50, 50], abs=0.00001)
+    # Both axes carry a bar per panel: measuring only one of them cannot reveal anisotropic scaling.
+    assert sorted(r["axis"] for r in combined["reference_lines"]) == ["horizontal", "horizontal", "vertical", "vertical"]
+    assert all(round(r["length_mm"], 3) == 50.0 for r in combined["reference_lines"])
     # Check actual encoded vector form extent via pypdf as well as generator report.
     page = PdfReader(directory / "front_charuco.pdf").pages[0]
     form = page["/Resources"]["/XObject"]["/FormXob.Charuco_front"].get_object()
@@ -140,7 +151,7 @@ def test_scaled_pdf_is_rejected(artifacts, tmp_path):
 def test_print_layout_has_clear_annotation_bands(config):
     placements = plan_pages(config, config.boards)
     for placement in placements:
-        px, py, pw, ph = placement.panel_bbox_mm
+        px, py, _, ph = placement.panel_bbox_mm
         assert placement.x_mm >= px + config.printing.white_margin_mm
         assert placement.y_mm >= py + 10 + config.printing.white_margin_mm
         assert placement.y_mm + placement.height_mm + config.printing.white_margin_mm <= py + ph - 14 + 1e-9
@@ -230,3 +241,142 @@ def test_rendered_vector_pdf_decodes_both_boards(artifacts, tmp_path):
         assert result["matched_marker_ids"] == record["marker_ids"]
         assert result["detected_marker_count"] == 20
         assert result["detected_charuco_corner_count"] == 12
+
+
+def test_photograph_reports_marker_sampling_resolution(artifacts, tmp_path):
+    directory, manifest, _ = artifacts
+    record = manifest["boards"][0]
+    board = reconstruct_board(manifest, "front")
+    image = cv2.imread(str(directory / record["files"]["png"]), cv2.IMREAD_GRAYSCALE)
+    photo = cv2.resize(image, None, fx=0.45, fy=0.45, interpolation=cv2.INTER_AREA)
+    path = tmp_path / "photo.png"
+    cv2.imwrite(str(path), photo)
+    result = validate_image(path, record, board)
+    assert result["passed"], result["failures"]
+    # Roughly 330 px per 7-module marker at full size, so a 0.45 scale keeps ~21 px per module.
+    assert 10 < result["detection_quality"]["min_pixels_per_module"] < 30
+    assert result["detection_quality"]["modules_per_marker"] == 7
+    assert result["warnings"] == []
+
+
+def test_under_resolved_photograph_gets_a_quality_warning(artifacts, tmp_path, monkeypatch):
+    directory, manifest, _ = artifacts
+    record = manifest["boards"][0]
+    board = reconstruct_board(manifest, "front")
+    image = cv2.imread(str(directory / record["files"]["png"]), cv2.IMREAD_GRAYSCALE)
+    path = tmp_path / "photo.png"
+    cv2.imwrite(str(path), cv2.resize(image, None, fx=0.45, fy=0.45, interpolation=cv2.INTER_AREA))
+    monkeypatch.setattr("charuco_generator.validation.MIN_PIXELS_PER_MODULE", 60.0)
+    result = validate_image(path, record, board)
+    assert result["passed"]  # Under-resolution is reported as a warning, not a hard failure.
+    assert any("pixels per module" in warning for warning in result["warnings"])
+    assert any("Move closer" in warning for warning in result["warnings"])
+
+
+def test_detector_overrides_apply_and_are_range_checked(artifacts, tmp_path):
+    directory, manifest, _ = artifacts
+    record = manifest["boards"][0]
+    board = reconstruct_board(manifest, "front")
+    image = cv2.imread(str(directory / record["files"]["png"]), cv2.IMREAD_GRAYSCALE)
+    path = tmp_path / "photo.png"
+    cv2.imwrite(str(path), cv2.resize(image, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA))
+    geometry = Geometry(**record["geometry"])
+    assert detector_parameters(geometry).cornerRefinementMethod == cv2.aruco.CORNER_REFINE_NONE
+    assert detector_parameters(geometry, {"corner_refinement": "subpix"}).cornerRefinementMethod \
+        == cv2.aruco.CORNER_REFINE_SUBPIX
+    tuned = validate_image(path, record, board, detector_overrides={"adaptive_thresh_window": 15})
+    assert tuned["detected_marker_count"] == 10
+    for overrides, expected in (({"min_perimeter_rate": 5.0}, "min_perimeter_rate"),
+                                ({"corner_refinement": "magic"}, "corner refinement"),
+                                ({"not_a_parameter": 1}, "Unknown detector parameter")):
+        with pytest.raises(ConfigError, match=expected):
+            detector_parameters(geometry, overrides)
+
+
+def test_stale_artifacts_are_named_and_fail_verification(artifacts, tmp_path):
+    directory, manifest, _ = artifacts
+    for path in directory.iterdir():
+        shutil.copy2(path, tmp_path / path.name)
+    (tmp_path / "old_grid_charuco.png").write_bytes(b"leftover from an earlier run")
+    (tmp_path / "notes.txt").write_text("not an artifact")
+    result = validate_artifacts(tmp_path, manifest)
+    assert result["unexpected_files"] == ["old_grid_charuco.png"]
+    assert not result["passed"]
+    assert "delete them or regenerate with --clean" in result["unexpected_files_note"]
+    assert unexpected_files(tmp_path / "absent", set()) == []
+
+
+def test_generate_refuses_a_dirty_folder_until_cleaned(tmp_path, config):
+    target = tmp_path / "set"
+    generate(config, target)
+    leftover = target / "old_grid_charuco.pdf"
+    leftover.write_bytes(b"%PDF-1.4 fake")
+    with pytest.raises(ConfigError, match="does not produce") as excinfo:
+        generate(config, target)
+    assert "--clean to delete them" in str(excinfo.value)
+    assert leftover.is_file()
+    report = generate(config, target, clean=True)
+    assert report["passed"] and report["unexpected_files"] == []
+    assert not leftover.exists()
+    (target / "notes.txt").write_text("keep me")
+    assert generate(config, target, clean=True)["passed"]
+    assert (target / "notes.txt").read_text() == "keep me"
+
+
+def test_vector_exports_are_checksummed_not_print_files(config, tmp_path):
+    target = tmp_path / "exports"
+    generate(config, target, svg=True, dxf=True, dictionary_file=True)
+    manifest = load_manifest(target / "board_manifest.json")
+    assert manifest["exports"] == ["vector/DICT_5X5_100.yml", "vector/front.dxf", "vector/front.svg",
+                                   "vector/rear.dxf", "vector/rear.svg"]
+    assert set(manifest["sha256"]) > set(manifest["exports"])
+    assert unexpected_files(target, set(manifest["sha256"])) == []
+    assert validate_artifacts(target, manifest)["passed"]
+    svg = (target / "vector/front.svg").read_text()
+    dxf = (target / "vector/front.dxf").read_text()
+    assert 'width="100.000000mm"' in svg and 'viewBox="0 0 100.000000 80.000000"' in svg
+    assert "AC1009" in dxf and dxf.count("POLYLINE") == svg.count("<rect") - 1
+    assert "nmarkers" in (target / "vector/DICT_5X5_100.yml").read_text()
+    (target / "vector/front.svg").write_text("<svg/>")
+    tampered = validate_artifacts(target, manifest)
+    assert not tampered["passed"]
+    assert not tampered["checksums_match"]["vector/front.svg"]
+
+
+def test_manifest_without_exports_key_still_verifies(config, tmp_path):
+    target = tmp_path / "legacy"
+    generate(config, target)
+    manifest = load_manifest(target / "board_manifest.json")
+    del manifest["exports"]
+    assert validate_artifacts(target, manifest)["passed"]
+    manifest["exports"] = ["../outside.svg"]
+    with pytest.raises(ConfigError, match="vector/ subdirectory"):
+        validate_artifacts(target, manifest)
+
+
+def test_tiled_sheets_keep_measurable_bars_and_reassemble(config, tmp_path):
+    wide = replace(config, geometry=replace(config.geometry, squares_x=10, squares_y=8,
+                                             square_length_mm=30.0, marker_length_mm=21.0),
+                   printing=replace(config.printing, tile_overlap_mm=12.0, dpi=150),
+                   boards=(replace(config.boards[0], marker_ids=tuple(range(40))),))
+    target = tmp_path / "tiled"
+    report = generate(wide, target)
+    layout = load_manifest(target / "board_manifest.json")["pdf_layouts"]["front_charuco.pdf"]
+    assert len(layout) > 1 and len({placement["page"] for placement in layout}) == len(layout)
+    strips = sorted({(p["subrect_mm"][0], p["subrect_mm"][2]) for p in layout})
+    assert strips[0][0] == 0 and strips[-1][1] == pytest.approx(300)
+    assert all(b[0] <= a[1] - 12 + 1e-9 for a, b in itertools.pairwise(strips))
+    combined = next(pdf for pdf in report["pdfs"] if pdf["input"] == "front_A4.pdf")
+    assert {line["axis"] for line in combined["reference_lines"]} == {"horizontal", "vertical"}
+    assert len({line["page"] for line in combined["reference_lines"]}) == combined["page_count"]
+    assert all("tile" in pattern and "subrect_mm" in pattern for pattern in combined["patterns"])
+
+
+def test_oversized_board_without_tiling_says_how_to_proceed(config, tmp_path):
+    wide = replace(config, geometry=replace(config.geometry, squares_x=10, squares_y=8,
+                                             square_length_mm=30.0, marker_length_mm=21.0),
+                   boards=(replace(config.boards[0], marker_ids=tuple(range(40))),))
+    with pytest.raises(ConfigError, match=r"--tile-overlap-mm N") as excinfo:
+        generate(wide, tmp_path / "tiled")
+    assert "Automatic scaling is forbidden" in str(excinfo.value)
+    assert not (tmp_path / "tiled").exists()

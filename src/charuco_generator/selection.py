@@ -1,5 +1,6 @@
 """Board selection and consecutive marker ID allocation for CLI and menu use."""
 import hashlib
+import itertools
 import json
 from pathlib import Path
 
@@ -32,21 +33,59 @@ def assign_ids(data: dict, start: int) -> None:
         board["identifier"] = f"{board['name']}-ref-{digest}"
 
 
-def next_ids(config: Config, data: dict, root: Path) -> int:
+def ids_label(marker_ids) -> str:
+    """Filesystem-safe summary of an ID set; only genuinely consecutive runs collapse to a range."""
+    ids = sorted(set(marker_ids))
+    if not ids:
+        return "no-ids"
+    runs, start = [], ids[0]
+    for previous, current in itertools.pairwise(ids):
+        if current != previous + 1:
+            runs.append((start, previous))
+            start = current
+    runs.append((start, ids[-1]))
+    return "+".join(str(first) if first == last else f"{first}-{last}" for first, last in runs)
+
+
+#: Both artifact kinds record the marker IDs they consumed, so both reserve them.
+MANIFEST_NAMES = ("board_manifest.json", "aruco_manifest.json")
+
+
+def _manifest_ids(path: Path) -> tuple[str, list[int]]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("kind") == "aruco":
+        return document["configuration"]["dictionary"], list(document["marker_ids"])
+    saved = config_from_dict(document["configuration"])
+    return saved.geometry.dictionary, [marker for board in saved.boards for marker in board.marker_ids]
+
+
+def next_ids(config: Config, data: dict, root: Path, *, ignore_unreadable: bool = False,
+             warnings: list[str] | None = None) -> int:
     """Find an unused block within the config and saved output tree (same dictionary)."""
     geometry = Geometry(**data["geometry"])
     geometry.validate()
     capacity = dictionary_for(geometry.dictionary).bytesList.shape[0]
-    used = set()
+    used: set[int] = set()
     if config.geometry.dictionary == geometry.dictionary:
         used.update(marker for board in config.boards for marker in board.marker_ids)
-    for path in sorted(root.rglob("board_manifest.json")):
+    unreadable = []
+    for path in sorted(candidate for name in MANIFEST_NAMES for candidate in root.rglob(name)):
         try:
-            saved = config_from_dict(json.loads(path.read_text(encoding="utf-8"))["configuration"])
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise ConfigError(f"Cannot check saved IDs in {path}: {exc}") from exc
-        if saved.geometry.dictionary == geometry.dictionary:
-            used.update(marker for board in saved.boards for marker in board.marker_ids)
+            dictionary, marker_ids = _manifest_ids(path)
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+            unreadable.append((path, exc))
+            continue
+        if dictionary == geometry.dictionary:
+            used.update(marker_ids)
+    if unreadable:
+        details = "\n  ".join(f"{path}: {exc}" for path, exc in unreadable)
+        if not ignore_unreadable:
+            raise ConfigError("Saved manifests could not be read, so their IDs cannot be excluded:\n  " + details
+                              + "\nRepair or delete them, or rerun with --ignore-unreadable-manifests to allocate "
+                                "IDs without checking those files")
+        if warnings is not None:
+            warnings.append("Ignored unreadable manifest(s) when choosing marker IDs: "
+                            + ", ".join(str(path) for path, _ in unreadable))
     count = geometry.marker_count * len(data["boards"])
     run = 0
     for marker in range(capacity):
