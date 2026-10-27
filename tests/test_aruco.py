@@ -234,3 +234,10 @@ def test_marker_count_is_capped_before_rendering(tmp_path, capsys, options):
     assert main(["aruco", *options, "--output-dir", str(target)]) == 2
     assert "at most 500" in capsys.readouterr().err
     assert not target.exists()
+
+
+def test_set_label_never_implies_missing_ids():
+    from charuco_generator.aruco import marker_set_label
+    assert marker_set_label(tuple(range(1, 21))) == "aruco_1-20"
+    assert marker_set_label((1, 2, 3, 50)) == "aruco_1-3+50"
+    assert marker_set_label((7,)) == "aruco_07"

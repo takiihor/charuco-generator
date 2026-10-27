@@ -22,6 +22,7 @@ from .config import (
 )
 from .export import VECTOR_DIR, export_dictionary, export_dxf, export_svg
 from .generator import clear_stale, write_json
+from .selection import ids_label
 from .sheet import (
     ACTUAL_SIZE_NOTE,
     FOOTER_MM,
@@ -47,6 +48,7 @@ from .validation import (
     UNEXPECTED_NOTE,
     ValidationError,
     load_manifest,
+    quality_check,
     unexpected_files,
     validate_vector_pdf,
 )
@@ -139,9 +141,10 @@ def marker_name(marker_id: int) -> str:
 
 
 def marker_set_label(marker_ids: tuple[int, ...]) -> str:
+    # Only genuinely consecutive runs collapse to a range: 1,2,3,50 is "1-3+50", never "1-50".
     if len(marker_ids) == 1:
         return marker_name(marker_ids[0])
-    return f"aruco_{marker_ids[0]}-{marker_ids[-1]}"
+    return f"aruco_{ids_label(marker_ids)}"
 
 
 def panel_size(config: ArucoConfig) -> tuple[float, float]:
@@ -253,12 +256,6 @@ def pdf_layouts(config: ArucoConfig) -> dict:
     return layouts
 
 
-def _quality(manifest: dict, config: ArucoConfig) -> tuple[dict, list[str]]:
-    quality = dictionary_quality(config.dictionary, list(config.marker_ids))
-    saved = manifest.get("dictionary_quality")
-    return quality, [] if saved in (None, quality) else ["Manifest dictionary quality differs from the saved configuration"]
-
-
 def export_marker_files(directory: Path, config: ArucoConfig, rects: dict, *, svg: bool, dxf: bool) -> list[str]:
     """CAD copies of the marker modules; returns names relative to the artifact directory."""
     if not (svg or dxf):
@@ -335,10 +332,11 @@ def validate_aruco_artifacts(directory: Path, manifest: dict) -> dict:
                                                   placements, rects))
         except (OSError, ValueError, KeyError, PdfReadError) as exc:
             pdf_reports.append({"input": filename, "passed": False, "failures": [f"Cannot verify PDF: {exc}"]})
-    quality, quality_failures = _quality(manifest, config)
+    quality, quality_failures, warnings = quality_check(manifest, config.dictionary, list(marker_ids))
     passed = (all(checksums.values()) and not stale and not quality_failures
               and all(item["passed"] for item in image_reports + pdf_reports))
-    warnings = [] if (warning := untested_opencv_warning()) is None else [warning]
+    if (warning := untested_opencv_warning()) is not None:
+        warnings.append(warning)
     return {"schema_version": 1, "kind": "aruco", "passed": passed,
             "marker_ids": list(marker_ids), "markers": image_reports, "pdfs": pdf_reports,
             "checksums_match": checksums, "unexpected_files": stale, "unexpected_files_note": UNEXPECTED_NOTE,
@@ -354,7 +352,8 @@ def generate_aruco(config: ArucoConfig, output_dir: str | Path = "output/aruco",
     metrics = marker_raster_metrics(config)
     target = Path(output_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    clear_stale(target, set(layouts) | {f"{marker_name(i)}.png" for i in marker_ids}, clean)
+    keep = set(layouts) | {f"{marker_name(i)}.png" for i in marker_ids}
+    clear_stale(target, keep, clean, remove=False)
     dictionary = dictionary_for(config.dictionary)
     with TemporaryDirectory(prefix=".aruco-staging-", dir=target.parent) as staging:
         directory = Path(staging)
@@ -387,6 +386,7 @@ def generate_aruco(config: ArucoConfig, output_dir: str | Path = "output/aruco",
         if not report["passed"]:
             raise ValidationError(report)
         write_json(directory / "aruco_validation_report.json", report)
+        clear_stale(target, keep, clean)
         publish(directory, target, sorted(filenames | set(exports)),
                 ["aruco_manifest.json", "aruco_validation_report.json"])
         return report

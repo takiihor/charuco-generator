@@ -203,3 +203,9 @@ def test_auto_ids_update_reference_identity(config):
     assign_ids(second, 40)
     assert first["boards"][0]["identifier"] != second["boards"][0]["identifier"]
     assert config_from_dict(first).boards[0].identifier != config.boards[0].identifier
+
+
+def test_nonobject_saved_manifest_refuses_automatic_id_allocation(config, tmp_path):
+    (tmp_path / 'board_manifest.json').write_text('[]')
+    with pytest.raises(ConfigError, match='could not be read'):
+        next_ids(config, config.to_dict(), tmp_path)

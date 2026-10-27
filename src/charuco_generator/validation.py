@@ -12,6 +12,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from pypdf.generic import ContentStream
 
+from . import __version__
 from .board import reconstruct_board, sha256, untested_opencv_warning
 from .config import (
     Config,
@@ -401,11 +402,20 @@ def unexpected_files(directory: Path, known: set[str]) -> list[str]:
                   if path.is_file() and path.suffix.lower() in ARTIFACT_SUFFIXES and path.name not in known)
 
 
-def _quality_check(manifest: dict, dictionary: str, marker_ids: list[int]) -> tuple[dict, list[str]]:
+def quality_check(manifest: dict, dictionary: str, marker_ids: list[int]) -> tuple[dict, list[str], list[str]]:
+    """Recompute dictionary quality; return (quality, failures, warnings).
+
+    Generator 1.0.0 recorded distances with a bit-unpacking error, so a mismatch in a manifest
+    from another generator version is reported as a warning: the artifacts are still valid.
+    """
     quality = dictionary_quality(dictionary, marker_ids)
     saved = manifest.get("dictionary_quality")
-    failures = [] if saved in (None, quality) else ["Manifest dictionary quality differs from the saved configuration"]
-    return quality, failures
+    if saved in (None, quality):
+        return quality, [], []
+    if manifest.get("generator_version") != __version__:
+        return quality, [], [f"Dictionary quality recorded by generator {manifest.get('generator_version')} used an "
+                             "earlier formula; the recomputed values are reported here"]
+    return quality, ["Manifest dictionary quality differs from the saved configuration"], []
 
 
 def expected_artifacts(config: Config) -> set[str]:
@@ -437,7 +447,7 @@ def validate_artifacts(directory: Path, manifest: dict) -> dict:
                         for filename, checksum in manifest["sha256"].items()}
     all_ids = [i for spec in config.boards for i in spec.marker_ids]
     unique = len(all_ids) == len(set(all_ids))
-    quality, quality_failures = _quality_check(manifest, config.geometry.dictionary, all_ids)
+    quality, quality_failures, warnings = quality_check(manifest, config.geometry.dictionary, all_ids)
     for record in manifest["boards"]:
         board = reconstruct_board(manifest, record["name"])
         expected_paths = {"png": f"{record['name']}_charuco.png", "pdf": f"{record['name']}_charuco.pdf", "combined_pdf": combined}
@@ -455,7 +465,8 @@ def validate_artifacts(directory: Path, manifest: dict) -> dict:
             pdf_reports.append({"input": filename, "passed": False, "failures": [f"Cannot verify PDF: {exc}"]})
     passed = (unique and not stale and not quality_failures
               and all(checksum_results.values()) and all(r["passed"] for r in image_reports + pdf_reports))
-    warnings = [] if (warning := untested_opencv_warning()) is None else [warning]
+    if (warning := untested_opencv_warning()) is not None:
+        warnings.append(warning)
     return {"schema_version": 1, "passed": passed, "opencv_version": cv2.__version__,
             "marker_id_sets_disjoint": unique, "checksums_match": checksum_results,
             "unexpected_files": stale, "unexpected_files_note": UNEXPECTED_NOTE,

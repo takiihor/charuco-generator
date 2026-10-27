@@ -23,7 +23,7 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def clear_stale(target: Path, keep: set[str], clean: bool) -> None:
+def clear_stale(target: Path, keep: set[str], clean: bool, *, remove: bool = True) -> None:
     """Refuse to publish next to artifacts of a different configuration.
 
     A leftover ``*_charuco.pdf`` keeps its own name but no longer matches the manifest about to be
@@ -36,8 +36,9 @@ def clear_stale(target: Path, keep: set[str], clean: bool) -> None:
         raise ConfigError(
             f"{target} already holds {len(stale)} artifact file(s) this configuration does not produce: "
             f"{', '.join(stale)}. Remove them, choose another --output-dir, or pass --clean to delete them")
-    for name in stale:
-        (target / name).unlink()
+    if remove:
+        for name in stale:
+            (target / name).unlink()
 
 
 def generate(config: Config, output_dir: str | Path | None = None, *, clean: bool = False,
@@ -48,7 +49,7 @@ def generate(config: Config, output_dir: str | Path | None = None, *, clean: boo
     raster_metrics(config.geometry, config.printing)
     target = Path(config.output_dir if output_dir is None else output_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    clear_stale(target, expected_artifacts(config), clean)
+    clear_stale(target, expected_artifacts(config), clean, remove=False)
     with TemporaryDirectory(prefix=".charuco-staging-", dir=target.parent) as staging:
         directory = Path(staging)
         manifest: dict[str, Any] = {
@@ -95,5 +96,6 @@ def generate(config: Config, output_dir: str | Path | None = None, *, clean: boo
         write_json(directory / "validation_report.json", report)
         if not report["passed"]:
             raise ValidationError(report)
+        clear_stale(target, expected_artifacts(config), clean)
         publish(directory, target, sorted(filenames), ["board_manifest.json", "validation_report.json"])
         return report

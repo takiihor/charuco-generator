@@ -21,6 +21,9 @@ def assign_ids(data: dict, start: int) -> None:
     geometry.validate()
     capacity = dictionary_for(geometry.dictionary).bytesList.shape[0]
     count = geometry.marker_count * len(data["boards"])
+    if count > capacity:
+        raise ConfigError(f"Need {count} distinct IDs but {geometry.dictionary} holds only {capacity}; "
+                          "use fewer or larger squares, fewer boards, or a larger dictionary")
     if type(start) is not int or start < 0 or start + count > capacity:
         raise ConfigError(f"Need {count} consecutive IDs; first ID must be 0..{capacity - count} "
                           f"for {geometry.dictionary} ({capacity} IDs)")
@@ -53,6 +56,8 @@ MANIFEST_NAMES = ("board_manifest.json", "aruco_manifest.json")
 
 def _manifest_ids(path: Path) -> tuple[str, list[int]]:
     document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ConfigError("Saved manifest must contain a JSON object")
     if document.get("kind") == "aruco":
         return document["configuration"]["dictionary"], list(document["marker_ids"])
     saved = config_from_dict(document["configuration"])

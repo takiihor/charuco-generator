@@ -380,3 +380,42 @@ def test_oversized_board_without_tiling_says_how_to_proceed(config, tmp_path):
         generate(wide, tmp_path / "tiled")
     assert "Automatic scaling is forbidden" in str(excinfo.value)
     assert not (tmp_path / "tiled").exists()
+
+
+def test_tall_narrow_board_tiles_stay_inside_the_pattern(config, tmp_path):
+    tall = replace(config, geometry=replace(config.geometry, squares_x=4, squares_y=12,
+                                            square_length_mm=30.0, marker_length_mm=21.0),
+                   printing=replace(config.printing, tile_overlap_mm=10.0, dpi=150),
+                   boards=(replace(config.boards[0], marker_ids=tuple(range(24))),))
+    layout = plan_pages(tall, tall.boards)
+    assert len(layout) > 1
+    for placement in layout:
+        x0, y0, x1, y1 = placement.subrect_mm
+        assert 0 <= x0 < x1 <= 120 and 0 <= y0 < y1 <= 360
+        # Width fits the page, so every tile carries the full width and the edge marks sit on the pattern.
+        assert (x0, x1) == (0, 120) and placement.width_mm == 120
+    assert generate(tall, tmp_path / "tall")["passed"]
+
+
+def test_dictionary_quality_mismatch_from_older_generator_only_warns(artifacts):
+    directory, manifest, _ = artifacts
+    edited = dict(manifest, dictionary_quality={**manifest["dictionary_quality"], "min_hamming_distance": 6})
+    current = validate_artifacts(directory, edited)
+    assert not current["passed"] and current["quality_failures"]
+    older = validate_artifacts(directory, dict(edited, generator_version="1.0.0"))
+    assert older["passed"] and not older["quality_failures"]
+    assert any("earlier formula" in warning for warning in older["warnings"])
+
+
+def test_failed_clean_generation_preserves_previous_artifacts(config, tmp_path, monkeypatch):
+    import charuco_generator.generator as generator
+    target = tmp_path / 'previous'
+    target.mkdir()
+    previous = target / 'previous_charuco.pdf'
+    previous.write_bytes(b'previous verified print')
+    def fail(*args, **kwargs):
+        raise OSError('disk full while staging')
+    monkeypatch.setattr(generator, 'render_png', fail)
+    with pytest.raises(OSError, match='disk full'):
+        generator.generate(config, target, clean=True)
+    assert previous.read_bytes() == b'previous verified print'
