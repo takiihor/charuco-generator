@@ -1,0 +1,10 @@
+# Development and test dependencies (the runtime set is installed transitively).
+-r requirements.txt
+pytest==8.4.2
+# Pin pytest's transitive dependencies too.
+iniconfig==2.3.0
+pluggy==1.6.0
+Pygments==2.19.2
+colorama==0.4.6; sys_platform == 'win32'
+ruff==0.17.3
+mypy==2.4.0

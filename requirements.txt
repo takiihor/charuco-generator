@@ -1,13 +1,10 @@
+# Runtime dependencies, pinned for repeatable installation.
 opencv-contrib-python-headless==4.11.0.86
 numpy==2.3.5
 Pillow==12.0.0
 reportlab==4.4.5
 pypdf==6.1.3
-pytest==8.4.2
-# Pin transitive dependencies too, for repeatable installation.
+# Pin transitive dependencies too.
 charset-normalizer==3.4.4
-iniconfig==2.3.0
+# Used by generate_charuco.sh to check installed versions without contacting a network.
 packaging==25.0
-pluggy==1.6.0
-Pygments==2.19.2
-colorama==0.4.6; sys_platform == 'win32'

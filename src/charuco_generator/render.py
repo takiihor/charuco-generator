@@ -1,5 +1,4 @@
 """Lossless rasters and exact-size vector print forms; no fit-to-page path."""
-from dataclasses import dataclass
 import math
 from pathlib import Path
 
@@ -7,21 +6,34 @@ import cv2
 import numpy as np
 from PIL import Image
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase.pdfmetrics import stringWidth
 
+from . import __version__
 from .config import BoardSpec, Config, ConfigError, Geometry, Printing, page_size_mm
+from .sheet import (
+    EDGE_MARK_MM,
+    FOOTER_MM,
+    HEADER_MM,
+    LABEL_BAND_MM,
+    MIN_BOARD_PANEL_MM,
+    PANEL_GAP_MM,
+    REFERENCE_BAND_MM,
+    REFERENCE_LINE_MM,
+    SCALE_GUTTER_MM,
+    Placement,
+    draw_scale_marks,
+    fit_text,
+    new_canvas,
+    page_footer,
+    page_header,
+    vertical_line_length,
+)
 
-LABEL_BAND_MM = 14.0
-REFERENCE_BAND_MM = 10.0
-HEADER_MM = 14.0
-FOOTER_MM = 8.0
-PANEL_GAP_MM = 6.0
+MEASURE_NOTE = "Check dimensions after printing and mounting. Image detection does not verify physical accuracy."
 
 
 def raster_metrics(geometry: Geometry, printing: Printing) -> dict:
     ideal = geometry.square_length_mm * printing.dpi / 25.4
-    square_px = int(math.floor(ideal + 0.5))
+    square_px = math.floor(ideal + 0.5)
     dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, geometry.dictionary))
     modules = dictionary.markerSize + 2 * geometry.border_bits
     if square_px * geometry.marker_length_mm / geometry.square_length_mm < modules * 4:
@@ -42,36 +54,39 @@ def raster_metrics(geometry: Geometry, printing: Printing) -> dict:
         "white_margin_mm_at_exact_size": margin_px * geometry.square_length_mm / square_px,
         "pattern_mm_if_forced_to_requested_dpi": [v * 25.4 / printing.dpi for v in pattern_px],
         "pattern_rounding_mm_at_requested_dpi": [
-            px * 25.4 / printing.dpi - size for px, size in zip(pattern_px, geometry.pattern_mm)],
+            px * 25.4 / printing.dpi - size for px, size in zip(pattern_px, geometry.pattern_mm, strict=True)],
         "pixel_pitch_mm_at_exact_size": geometry.square_length_mm / square_px,
         "raster_edge_quantization_bound_mm": geometry.square_length_mm / square_px,
-        "notes": "Whole pixels per square preserve exact aspect ratio. Raster marker/module edges have pixel quantization. PNG pHYs metadata adds integer pixels/metre rounding. PDF uses independent exact-size vectors.",
+        "notes": "Whole pixels per square preserve exact aspect ratio. Raster marker/module edges have pixel "
+                 "quantization. PNG pHYs metadata adds integer pixels/metre rounding. "
+                 "PDF uses independent exact-size vectors.",
     }
 
 
-def render_png(path: Path, geometry: Geometry, printing: Printing, board) -> dict:
+def render_png(path: Path, geometry: Geometry, printing: Printing, board: object) -> dict:
     metrics = raster_metrics(geometry, printing)
-    pattern = board.generateImage(tuple(metrics["pattern_pixels"]), marginSize=0,
+    pattern = board.generateImage(tuple(metrics["pattern_pixels"]), marginSize=0,  # type: ignore[attr-defined]
                                   borderBits=geometry.border_bits)
-    image = cv2.copyMakeBorder(pattern, *([metrics["margin_pixels"]] * 4),
-                               cv2.BORDER_CONSTANT, value=255)
+    margin = metrics["margin_pixels"]
+    image = cv2.copyMakeBorder(pattern, margin, margin, margin, margin, cv2.BORDER_CONSTANT, value=(255,))
     # Mode L avoids palette, antialiasing, JPEG, and colour management surprises.
     Image.fromarray(image).save(path, format="PNG", compress_level=9,
-                               dpi=(metrics["png_metadata_dpi"],) * 2)
+                                dpi=(metrics["png_metadata_dpi"],) * 2)
     return metrics
 
 
-def pattern_rectangles_mm(geometry: Geometry, spec: BoardSpec, board) -> list[tuple[float, float, float, float]]:
+def pattern_rectangles_mm(geometry: Geometry, spec: BoardSpec, board: object) -> list[tuple[float, float, float, float]]:
     """Black vector rectangles in PDF bottom-left coordinates, from encoded dictionary bits."""
     square = geometry.square_length_mm
     marker = geometry.marker_length_mm
     height = geometry.pattern_mm[1]
-    cells = {}
-    for marker_id, points in zip(spec.marker_ids, board.getObjPoints(), strict=True):
+    cells: dict[tuple[int, int], int] = {}
+    for marker_id, points in zip(spec.marker_ids, board.getObjPoints(), strict=True):  # type: ignore[attr-defined]
         center = np.asarray(points).mean(axis=0) * 1000.0 / square
-        cells[(int(round(float(center[0] - 0.5))), int(round(float(center[1] - 0.5))))] = marker_id
-    rectangles = []
-    modules = board.getDictionary().markerSize + 2 * geometry.border_bits
+        cells[(round(float(center[0] - 0.5)), round(float(center[1] - 0.5)))] = marker_id
+    rectangles: list[tuple[float, float, float, float]] = []
+    dictionary = board.getDictionary()  # type: ignore[attr-defined]
+    modules = dictionary.markerSize + 2 * geometry.border_bits
     pitch = marker / modules
     inset = (square - marker) / 2.0
     for row in range(geometry.squares_y):
@@ -79,8 +94,7 @@ def pattern_rectangles_mm(geometry: Geometry, spec: BoardSpec, board) -> list[tu
             if (column, row) not in cells:
                 rectangles.append((column * square, height - (row + 1) * square, square, square))
                 continue
-            bits = board.getDictionary().generateImageMarker(cells[(column, row)], modules,
-                                                              borderBits=geometry.border_bits)
+            bits = dictionary.generateImageMarker(cells[(column, row)], modules, borderBits=geometry.border_bits)
             # Merge horizontal runs, keeping all vector module boundaries exact in mm.
             for by in range(modules):
                 bx = 0
@@ -97,41 +111,78 @@ def pattern_rectangles_mm(geometry: Geometry, spec: BoardSpec, board) -> list[tu
     return rectangles
 
 
-@dataclass(frozen=True)
-class Placement:
-    name: str
-    page: int
-    x_mm: float
-    y_mm: float
-    width_mm: float
-    height_mm: float
-    panel_bbox_mm: tuple[float, float, float, float]
+def panel_size(config: Config) -> tuple[float, float]:
+    """Panel footprint including the white margin, both reserved bands and the scale gutter."""
+    width, height = config.geometry.pattern_mm
+    margin = config.printing.white_margin_mm
+    panel_w = max(width + 2 * margin, MIN_BOARD_PANEL_MM) + SCALE_GUTTER_MM
+    return panel_w, height + 2 * margin + LABEL_BAND_MM + REFERENCE_BAND_MM
 
-    def to_dict(self) -> dict:
-        return {"board": self.name, "page": self.page,
-                "pdf_form": f"/FormXob.Charuco_{self.name}",
-                "pattern_bbox_mm_xywh": [self.x_mm, self.y_mm, self.width_mm, self.height_mm],
-                "panel_bbox_mm_xywh": list(self.panel_bbox_mm),
-                "reference_line_mm": 50.0}
+
+def _tile_subrects(pattern_mm: tuple[float, float], tile_mm: tuple[float, float],
+                   overlap_mm: float) -> list[tuple[float, float, float, float]]:
+    """Board-space sub-rectangles (x0, y0, x1, y1) in mm from the pattern's top-left corner."""
+    width, height = pattern_mm
+    step_x, step_y = tile_mm[0] - overlap_mm, tile_mm[1] - overlap_mm
+    if step_x <= 0 or step_y <= 0:
+        raise ConfigError("Tile overlap must be smaller than the printable tile size")
+    columns = max(1, math.ceil((width - overlap_mm) / step_x))
+    rows = max(1, math.ceil((height - overlap_mm) / step_y))
+    result: list[tuple[float, float, float, float]] = []
+    for row in range(rows):
+        y0 = min(row * step_y, height - tile_mm[1])
+        y1 = min(y0 + tile_mm[1], height)
+        for column in range(columns):
+            x0 = min(column * step_x, width - tile_mm[0])
+            result.append((x0, y0, min(x0 + tile_mm[0], width), y1))
+    return result
 
 
 def plan_pages(config: Config, specs: tuple[BoardSpec, ...]) -> list[Placement]:
-    """Keep requested size; add pages when needed, never shrink a pattern."""
+    """Keep requested size; add pages, then tiles when needed. Never shrink a pattern."""
     page_w, page_h = page_size_mm(config.printing.page_size)
     margin = config.printing.white_margin_mm
     page_margin = config.printing.page_margin_mm
+    overlap = config.printing.tile_overlap_mm
     width, height = config.geometry.pattern_mm
-    panel_w = max(width + 2 * margin, 110.0)
-    panel_h = height + 2 * margin + LABEL_BAND_MM + REFERENCE_BAND_MM
+    panel_w, panel_h = panel_size(config)
     available_w = page_w - 2 * page_margin
     available_h = page_h - 2 * page_margin - HEADER_MM - FOOTER_MM
     if panel_w > available_w or panel_h > available_h:
-        raise ConfigError(
-            f"WARNING: Board and reserved margins/labels ({panel_w:g} x {panel_h:g} mm) "
-            f"exceed printable page area ({available_w:g} x {available_h:g} mm). "
-            "Select a larger page or smaller geometry/margins; automatic scaling is forbidden.")
-    per_page = max(1, int((available_h + PANEL_GAP_MM + 1e-9) // (panel_h + PANEL_GAP_MM)))
-    result = []
+        if overlap <= 0:
+            raise ConfigError(
+                f"WARNING: Board and reserved margins/labels ({panel_w:g} x {panel_h:g} mm) "
+                f"exceed printable page area ({available_w:g} x {available_h:g} mm). "
+                "Select a larger page or smaller geometry/margins, or split the board across sheets "
+                "with --tile-overlap-mm N (assembly seams add error; a single rigid sheet is preferred). "
+                "Automatic scaling is forbidden.")
+        # Tile the pattern itself: each sheet carries one tile with its own full panel.
+        tile_w = available_w - (panel_w - width)
+        tile_h = available_h - (panel_h - height)
+        if tile_w <= overlap or tile_h <= overlap:
+            raise ConfigError(f"No printable tile remains for a {page_w:g} x {page_h:g} mm page; "
+                              "reduce margins/labels or use a larger page")
+        subrects = _tile_subrects(config.geometry.pattern_mm, (tile_w, tile_h), overlap)
+        placements: list[Placement] = []
+        for spec_index, spec in enumerate(specs):
+            for tile_index, (x0, y0, x1, y1) in enumerate(subrects):
+                page = spec_index * len(subrects) + tile_index
+                tile_panel_w = max((x1 - x0) + 2 * margin, MIN_BOARD_PANEL_MM) + SCALE_GUTTER_MM
+                tile_panel_h = (y1 - y0) + 2 * margin + LABEL_BAND_MM + REFERENCE_BAND_MM
+                panel_x, panel_y = (page_w - tile_panel_w) / 2, page_margin + FOOTER_MM + (available_h - tile_panel_h) / 2
+                placements.append(Placement(
+                    spec.name, page, panel_x + (tile_panel_w - SCALE_GUTTER_MM - (x1 - x0)) / 2,
+                    panel_y + REFERENCE_BAND_MM + margin, x1 - x0, y1 - y0,
+                    (panel_x, panel_y, tile_panel_w, tile_panel_h),
+                    reference_x_mm=min(REFERENCE_LINE_MM, (x1 - x0)), reference_y_mm=vertical_line_length(
+                        tile_panel_h - REFERENCE_BAND_MM - LABEL_BAND_MM),
+                    form_size=(width, height),
+                    subrect_mm=(x0, y0, x1, y1),
+                    tile=f"{tile_index + 1}/{len(subrects)}"))
+        return placements
+    per_page = max(1, math.floor((available_h + PANEL_GAP_MM) // (panel_h + PANEL_GAP_MM)))
+    reference_y = vertical_line_length(panel_h - REFERENCE_BAND_MM - LABEL_BAND_MM)
+    result: list[Placement] = []
     for index, spec in enumerate(specs):
         page = index // per_page
         slot = index % per_page
@@ -142,29 +193,18 @@ def plan_pages(config: Config, specs: tuple[BoardSpec, ...]) -> list[Placement]:
         panel_x = (page_w - panel_w) / 2
         result.append(Placement(spec.name, page, (page_w - width) / 2,
                                 panel_y + REFERENCE_BAND_MM + margin,
-                                width, height, (panel_x, panel_y, panel_w, panel_h)))
+                                width, height, (panel_x, panel_y, panel_w, panel_h),
+                                reference_y_mm=reference_y))
     return result
-
-
-def _fitted_text(pdf, x: float, y: float, text: str, max_width: float, size: float) -> None:
-    measured = stringWidth(text, "Helvetica", size)
-    if measured > max_width:
-        size *= max_width / measured
-    pdf.setFont("Helvetica", size)
-    pdf.drawString(x * mm, y * mm, text)
 
 
 def render_pdf(path: Path, config: Config, specs: tuple[BoardSpec, ...], boards: dict) -> list[dict]:
     placements = plan_pages(config, specs)
     page_w, page_h = page_size_mm(config.printing.page_size)
-    pdf = canvas.Canvas(str(path), pagesize=(page_w * mm, page_h * mm),
-                        pageCompression=1, invariant=1)
-    pdf.setTitle("ChArUco - actual size localization references")
-    pdf.setAuthor("Precision ChArUco Generator")
-    pdf.setCreator("charuco-generator 1.0.0")
-    pdf.setViewerPreference("PrintScaling", "None")
+    pdf = new_canvas(path, (page_w, page_h), "ChArUco - actual size localization references",
+                     f"charuco-generator {__version__}")
+    width, height = config.geometry.pattern_mm
     for spec in specs:
-        width, height = config.geometry.pattern_mm
         pdf.beginForm(f"Charuco_{spec.name}", 0, 0, width * mm, height * mm)
         pdf.setFillColorRGB(1, 1, 1)
         pdf.rect(0, 0, width * mm, height * mm, fill=1, stroke=0)
@@ -173,37 +213,44 @@ def render_pdf(path: Path, config: Config, specs: tuple[BoardSpec, ...], boards:
             pdf.rect(x * mm, y * mm, w * mm, h * mm, fill=1, stroke=0)
         pdf.endForm()
     by_name = {b.name: b for b in specs}
+    geometry = config.geometry
     for page_index in range(max(p.page for p in placements) + 1):
-        pm = config.printing.page_margin_mm
-        _fitted_text(pdf, pm, page_h - pm - 4, "ChArUco localization references", (page_w - 2 * pm) * mm, 12)
-        _fitted_text(pdf, pm, page_h - pm - 9,
-                     "ACTUAL SIZE / 100% - disable Fit, Shrink and printer scaling", (page_w - 2 * pm) * mm, 8)
+        page_margin = config.printing.page_margin_mm
+        page_header(pdf, page_w, page_h, page_margin, "ChArUco localization references")
         for placement in (p for p in placements if p.page == page_index):
             spec = by_name[placement.name]
             px, py, pw, ph = placement.panel_bbox_mm
             label_x = px + 1
             available = (pw - 2) * mm
             pdf.setFillColorRGB(0, 0, 0)
-            _fitted_text(pdf, label_x, py + ph - 4, f"{spec.name.upper()} | {spec.identifier}", available, 10)
-            g = config.geometry
-            _fitted_text(pdf, label_x, py + ph - 8,
-                         f"Pattern {placement.width_mm:g} x {placement.height_mm:g} mm | square {g.square_length_mm:g} mm | marker {g.marker_length_mm:g} mm", available, 7.5)
-            id_text = ",".join(map(str, spec.marker_ids)) if len(spec.marker_ids) <= 12 else f"{len(spec.marker_ids)} unique IDs; see manifest"
-            _fitted_text(pdf, label_x, py + ph - 12, f"{g.dictionary} | IDs: {id_text}", available, 7)
+            tile_note = f" | tile {placement.tile}" if placement.tile else ""
+            fit_text(pdf, label_x, py + ph - 4,
+                     f"{spec.name.upper()} | {spec.identifier}{tile_note}", available, 10)
+            fit_text(pdf, label_x, py + ph - 8,
+                     f"Pattern {geometry.pattern_mm[0]:g} x {geometry.pattern_mm[1]:g} mm | sheet area "
+                     f"{placement.width_mm:g} x {placement.height_mm:g} mm | square {geometry.square_length_mm:g} mm | "
+                     f"marker {geometry.marker_length_mm:g} mm", available, 7.5)
+            id_text = (",".join(map(str, spec.marker_ids)) if len(spec.marker_ids) <= 12
+                       else f"{len(spec.marker_ids)} unique IDs; see manifest")
+            fit_text(pdf, label_x, py + ph - 12, f"{geometry.dictionary} | IDs: {id_text}", available, 7)
             pdf.saveState()
-            pdf.translate(placement.x_mm * mm, placement.y_mm * mm)
+            if placement.subrect_mm is not None:
+                x0, _y0, x1, y1 = placement.subrect_mm
+                clip = pdf.beginPath()
+                clip.rect(placement.x_mm * mm, placement.y_mm * mm, (x1 - x0) * mm, placement.height_mm * mm)
+                pdf.clipPath(clip, stroke=0, fill=0)
+                pdf.translate((placement.x_mm - x0) * mm, (placement.y_mm - (height - y1)) * mm)
+            else:
+                pdf.translate(placement.x_mm * mm, placement.y_mm * mm)
             pdf.doForm(f"Charuco_{spec.name}")
             pdf.restoreState()
-            # All reference ink stays below the reserved white margin.
-            line_x = placement.x_mm
-            line_y = py + 6
-            pdf.setLineWidth(0.2 * mm)
-            pdf.line(line_x * mm, line_y * mm, (line_x + 50) * mm, line_y * mm)
-            for end in (line_x, line_x + 50):
-                pdf.line(end * mm, (line_y - 1) * mm, end * mm, (line_y + 1) * mm)
-            _fitted_text(pdf, line_x, py + 2, "50 mm - measure between tick centres", available, 7)
-        _fitted_text(pdf, pm, pm + 2, "Check dimensions after printing and mounting. Image detection does not verify physical accuracy.",
-                     (page_w - 2 * pm) * mm, 7)
+            draw_scale_marks(pdf, placement.panel_bbox_mm,
+                             (placement.x_mm, placement.y_mm, placement.width_mm, placement.height_mm),
+                             placement.reference_x_mm, placement.reference_y_mm)
+            fit_text(pdf, px + 1, py + 2,
+                     f"{placement.reference_x_mm:g} mm and {placement.reference_y_mm:g} mm bars, "
+                     f"{EDGE_MARK_MM:g} mm edge marks - measure between tick centres", available, 7)
+        page_footer(pdf, page_w, page_margin, MEASURE_NOTE)
         pdf.showPage()
     pdf.save()
     return [p.to_dict() for p in placements]

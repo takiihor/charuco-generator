@@ -1,17 +1,21 @@
-from copy import deepcopy
-from dataclasses import replace
 import json
-from pathlib import Path
 import shutil
 import subprocess
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
-import pytest
 
-from charuco_generator.aruco import ArucoConfig, generate_aruco, validate_aruco_artifacts
+from charuco_generator.aruco import (
+    ArucoConfig,
+    generate_aruco,
+    validate_aruco_artifacts,
+)
 from charuco_generator.cli import main
 from charuco_generator.config import ConfigError, Printing, dictionary_for
 from charuco_generator.validation import ValidationError
@@ -60,7 +64,10 @@ def test_cli_custom_settings_and_verification(tmp_path, capsys):
     manifest = json.loads(manifest_path.read_text())
     assert manifest["configuration"] == {"dictionary": "DICT_4X4_50", "marker_length_mm": 40.0,
                                           "border_bits": 2, "printing": {"dpi": 300, "page_size": "A3",
-                                                                            "white_margin_mm": 8.0, "page_margin_mm": 12.0}}
+                                                                            "white_margin_mm": 8.0,
+                                                                            "page_margin_mm": 12.0,
+                                                                            "tile_overlap_mm": 0.0},
+                                          "marker_ids": list(range(1, 21))}
     assert manifest["marker_ids"] == list(range(1, 21))
     assert main(["verify", "--manifest", str(manifest_path), "--report", str(tmp_path / "verification.json")]) == 0
     assert json.loads((tmp_path / "verification.json").read_text())["passed"]
@@ -79,13 +86,26 @@ def test_invalid_requests_publish_nothing(tmp_path, options):
     assert not target.exists()
 
 
-def test_dictionary_must_include_id_twenty(monkeypatch):
-    class SmallDictionary:
-        bytesList = np.zeros((20, 1))
+def test_dictionary_must_contain_every_requested_id():
+    # DICT_4X4_50 holds IDs 0..49, so an ID beyond that cannot be printed with it.
+    with pytest.raises(ConfigError, match=r"DICT_4X4_50 contains IDs 0\.\.49, so \[60\] cannot be printed"):
+        ArucoConfig(dictionary="DICT_4X4_50", marker_ids=(0, 60)).validate()
 
-    monkeypatch.setattr("charuco_generator.aruco.dictionary_for", lambda _: SmallDictionary())
-    with pytest.raises(ConfigError, match="every marker ID"):
-        ArucoConfig().validate()
+
+def test_custom_id_subset_generates_and_verifies(tmp_path):
+    assert main(["aruco", "--ids", "3,7,40-42", "--output-dir", str(tmp_path)]) == 0
+    manifest = json.loads((tmp_path / "aruco_manifest.json").read_text())
+    assert manifest["marker_ids"] == [3, 7, 40, 41, 42]
+    assert {name for name in manifest["sha256"] if name.endswith(".png")} == {
+        "aruco_03.png", "aruco_07.png", "aruco_40.png", "aruco_41.png", "aruco_42.png"}
+    assert main(["verify", "--manifest", str(tmp_path / "aruco_manifest.json")]) == 0
+
+
+@pytest.mark.parametrize("ids", ["20-18", "1,,2", "a", "-5", "1.5"])
+def test_invalid_id_lists_are_rejected(tmp_path, ids):
+    target = tmp_path / "run"
+    assert main(["aruco", "--ids", ids, "--output-dir", str(target)]) == 2
+    assert not target.exists()
 
 
 def test_failed_validation_preserves_previous_files(tmp_path, monkeypatch):
@@ -168,3 +188,46 @@ def test_shell_launcher_from_another_directory(tmp_path):
     manifest = json.loads((output / "aruco_manifest.json").read_text())
     assert manifest["marker_ids"] == list(range(1, 21))
     assert manifest["configuration"]["marker_length_mm"] == 25
+
+
+def test_marker_exports_are_vector_files_only(tmp_path):
+    target = tmp_path / "exported"
+    assert main(["aruco", "--ids", "1-3", "--output-dir", str(target), "--export-svg",
+                 "--export-dxf", "--export-dictionary-yml"]) == 0
+    manifest = json.loads((target / "aruco_manifest.json").read_text())
+    assert manifest["exports"] == ["vector/DICT_5X5_100.yml", "vector/aruco_01.dxf", "vector/aruco_01.svg",
+                                   "vector/aruco_02.dxf", "vector/aruco_02.svg", "vector/aruco_03.dxf",
+                                   "vector/aruco_03.svg"]
+    assert all(name in manifest["sha256"] for name in manifest["exports"])
+    assert {path.name for path in target.iterdir() if path.suffix in (".svg", ".dxf", ".yml")} == set()
+    assert validate_aruco_artifacts(target, manifest)["passed"]
+    assert "<rect" in (target / "vector/aruco_01.svg").read_text()
+
+
+def test_stale_marker_sheets_block_regeneration_until_cleaned(tmp_path, capsys):
+    target = tmp_path / "markers"
+    assert main(["aruco", "--ids", "1-5", "--output-dir", str(target)]) == 0
+    (target / "aruco_99.png").write_bytes(b"from an earlier ID set")
+    assert main(["aruco", "--ids", "1-5", "--output-dir", str(target)]) == 2
+    assert "aruco_99.png" in capsys.readouterr().err
+    assert main(["aruco", "--ids", "1-5", "--output-dir", str(target), "--clean"]) == 0
+    assert not (target / "aruco_99.png").exists()
+    report = validate_aruco_artifacts(target, json.loads((target / "aruco_manifest.json").read_text()))
+    assert report["passed"] and report["unexpected_files"] == []
+
+
+def test_validate_command_rejects_an_aruco_manifest(tmp_path, capsys):
+    target = tmp_path / "markers"
+    assert main(["aruco", "--ids", "7", "--output-dir", str(target)]) == 0
+    assert main(["validate", "--manifest", str(target / "aruco_manifest.json"), "--board", "front",
+                 "--input", str(target / "aruco_07.png")]) == 2
+    error = capsys.readouterr().err
+    assert "standalone ArUco markers" in error and "verify --manifest" in error
+
+
+@pytest.mark.parametrize("options", (["--ids", "0-500"], ["--ids", "1-501"]))
+def test_marker_count_is_capped_before_rendering(tmp_path, capsys, options):
+    target = tmp_path / "many"
+    assert main(["aruco", *options, "--output-dir", str(target)]) == 2
+    assert "at most 500" in capsys.readouterr().err
+    assert not target.exists()

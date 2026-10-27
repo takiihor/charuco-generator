@@ -1,12 +1,17 @@
-from copy import deepcopy
 import json
+from copy import deepcopy
 
 import cv2
 import numpy as np
 import pytest
 
 from charuco_generator.board import create_board, reconstruct_board
-from charuco_generator.config import ConfigError, config_from_dict, load_config, page_size_mm
+from charuco_generator.config import (
+    ConfigError,
+    config_from_dict,
+    load_config,
+    page_size_mm,
+)
 
 
 def test_default_dimensions_and_internal_metres(config):
@@ -57,7 +62,10 @@ def test_invalid_parameters_rejected(config, section, key, value):
         config_from_dict(data)
 
 
-@pytest.mark.parametrize("case", ["within_board", "across_boards", "count", "negative", "capacity", "bool", "name", "identifier", "schema", "root", "unknown", "boards", "ids"])
+@pytest.mark.parametrize("case", [
+    "within_board", "across_boards", "count", "negative", "capacity", "bool", "name",
+    "identifier", "schema", "root", "unknown", "boards", "ids",
+])
 def test_invalid_board_configuration(config, case):
     data = config.to_dict()
     if case == "within_board":
@@ -132,5 +140,5 @@ def test_inconsistent_manifest_rejected(artifacts, field):
 
 def test_unsupported_opencv_rejected(config, monkeypatch):
     monkeypatch.setattr(cv2, "__version__", "4.5.0")
-    with pytest.raises(ConfigError, match="4.11.0"):
+    with pytest.raises(ConfigError, match=r"4\.11\.0"):
         create_board(config.geometry, config.boards[0])
