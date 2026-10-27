@@ -119,10 +119,29 @@ def panel_size(config: Config) -> tuple[float, float]:
     return panel_w, height + 2 * margin + LABEL_BAND_MM + REFERENCE_BAND_MM
 
 
+def single_sheet_pattern_limit(printing: Printing) -> tuple[float, float]:
+    """Largest pattern (width, height) in mm that plan_pages places on one page without tiling.
+
+    The inverse of panel_size; (0, 0) when the reserved bands alone overflow the page.
+    """
+    page_w, page_h = page_size_mm(printing.page_size)
+    available_w = page_w - 2 * printing.page_margin_mm
+    available_h = page_h - 2 * printing.page_margin_mm - HEADER_MM - FOOTER_MM
+    if available_w - SCALE_GUTTER_MM < MIN_BOARD_PANEL_MM:
+        return 0.0, 0.0
+    margins = 2 * printing.white_margin_mm
+    return (max(0.0, available_w - SCALE_GUTTER_MM - margins),
+            max(0.0, available_h - margins - LABEL_BAND_MM - REFERENCE_BAND_MM))
+
+
 def _tile_subrects(pattern_mm: tuple[float, float], tile_mm: tuple[float, float],
                    overlap_mm: float) -> list[tuple[float, float, float, float]]:
     """Board-space sub-rectangles (x0, y0, x1, y1) in mm from the pattern's top-left corner."""
     width, height = pattern_mm
+    # A board that fits one axis (e.g. narrow but too tall) gets a single full strip on that axis.
+    # Without the clamp, x0 = width - tile goes negative and the sheet clips empty space beside the
+    # pattern, shifting the printed edge marks off the real trim line.
+    tile_mm = (min(tile_mm[0], width), min(tile_mm[1], height))
     step_x, step_y = tile_mm[0] - overlap_mm, tile_mm[1] - overlap_mm
     if step_x <= 0 or step_y <= 0:
         raise ConfigError("Tile overlap must be smaller than the printable tile size")
@@ -201,7 +220,7 @@ def plan_pages(config: Config, specs: tuple[BoardSpec, ...]) -> list[Placement]:
 def render_pdf(path: Path, config: Config, specs: tuple[BoardSpec, ...], boards: dict) -> list[dict]:
     placements = plan_pages(config, specs)
     page_w, page_h = page_size_mm(config.printing.page_size)
-    pdf = new_canvas(path, (page_w, page_h), "ChArUco - actual size localization references",
+    pdf = new_canvas(path, (page_w, page_h), "ChArUco boards - actual size",
                      f"charuco-generator {__version__}")
     width, height = config.geometry.pattern_mm
     for spec in specs:
@@ -216,7 +235,7 @@ def render_pdf(path: Path, config: Config, specs: tuple[BoardSpec, ...], boards:
     geometry = config.geometry
     for page_index in range(max(p.page for p in placements) + 1):
         page_margin = config.printing.page_margin_mm
-        page_header(pdf, page_w, page_h, page_margin, "ChArUco localization references")
+        page_header(pdf, page_w, page_h, page_margin, "ChArUco boards")
         for placement in (p for p in placements if p.page == page_index):
             spec = by_name[placement.name]
             px, py, pw, ph = placement.panel_bbox_mm
@@ -224,15 +243,16 @@ def render_pdf(path: Path, config: Config, specs: tuple[BoardSpec, ...], boards:
             available = (pw - 2) * mm
             pdf.setFillColorRGB(0, 0, 0)
             tile_note = f" | tile {placement.tile}" if placement.tile else ""
-            fit_text(pdf, label_x, py + ph - 4,
-                     f"{spec.name.upper()} | {spec.identifier}{tile_note}", available, 10)
-            fit_text(pdf, label_x, py + ph - 8,
+            # Three lines above the edge marks, which occupy the bottom of this band.
+            fit_text(pdf, label_x, py + ph - 3.5,
+                     f"{spec.name.upper()} | {spec.identifier}{tile_note}", available, 9)
+            fit_text(pdf, label_x, py + ph - 6.5,
                      f"Pattern {geometry.pattern_mm[0]:g} x {geometry.pattern_mm[1]:g} mm | sheet area "
                      f"{placement.width_mm:g} x {placement.height_mm:g} mm | square {geometry.square_length_mm:g} mm | "
-                     f"marker {geometry.marker_length_mm:g} mm", available, 7.5)
+                     f"marker {geometry.marker_length_mm:g} mm", available, 7)
             id_text = (",".join(map(str, spec.marker_ids)) if len(spec.marker_ids) <= 12
                        else f"{len(spec.marker_ids)} unique IDs; see manifest")
-            fit_text(pdf, label_x, py + ph - 12, f"{geometry.dictionary} | IDs: {id_text}", available, 7)
+            fit_text(pdf, label_x, py + ph - 9.5, f"{geometry.dictionary} | IDs: {id_text}", available, 7)
             pdf.saveState()
             if placement.subrect_mm is not None:
                 x0, _y0, x1, y1 = placement.subrect_mm

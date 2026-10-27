@@ -2,7 +2,7 @@
 
 Generate distinct Front and Rear references for camera calibration and future industrial localization. The defaults use OpenCV `DICT_5X5_100`, a 5 x 4 chessboard, 20 mm squares and 14 mm markers. Each pattern is nominally **100 x 80 mm**. Front encodes IDs **1-10**; Rear encodes **11-20**. Both have 10 markers and 12 internal ChArUco intersections.
 
-The utility generates lossless PNGs, actual-size **vector PDFs**, a reconstruction manifest, and a machine-readable validation report. It reads the saved files back, reconstructs the boards and validates them before publishing the outputs. Optional SVG, DXF and OpenCV dictionary exports support manufacturing rigid targets. No robot motion, UR control, hand-eye calibration or placement logic is implemented.
+The utility generates lossless PNGs, actual-size **vector PDFs**, a reconstruction manifest, and a machine-readable validation report. It reads the saved files back, reconstructs the boards and validates them before publishing the outputs. Optional SVG, DXF and OpenCV dictionary exports support manufacturing rigid targets. A separate command produces a standard A4 camera calibration board. No robot motion, UR control, hand-eye calibration or placement logic is implemented.
 
 **Successful detection does not establish printed dimensional accuracy or robot placement accuracy. No physical printed-board measurement has been performed for the supplied examples.**
 
@@ -287,6 +287,36 @@ The generator reads every saved PNG back and requires detection of exactly its e
 
 The default standalone markers use the same dictionary and IDs as the default ChArUco boards. ArUco detection identifies matching dictionary/ID pairs identically on either type of print. Marker encoding follows the versioned [OpenCV ArUco generation API](https://docs.opencv.org/4.11.0/d5/dae/tutorial_aruco_detection.html).
 
+## Generate a standard A4 camera calibration board
+
+On Linux or macOS, run:
+
+```bash
+./generate_calibration.sh
+```
+
+This generates one **ChArUco calibration board filling an A4 sheet**: **5 x 7 squares of 30 mm** (150 x 210 mm pattern), **22.5 mm markers**, `DICT_6X6_250`, marker IDs **0-16**, giving 17 markers and 24 internal corners. That is OpenCV's conventional ChArUco calibration layout, usable for camera intrinsics (`calibrateCameraCharuco`) and robot hand-eye calibration tools such as MoveIt Calibration. The board uses a **different dictionary** from the `DICT_5X5_100` localization references and tank markers, so it can stay in view without ever being decoded as Front, Rear or a tank label.
+
+The module only chooses the geometry: the largest grid of the requested square size that fits one sheet with the standard margins, labels and both scale bars. Generation, verification, photo validation, stale-file protection and the optional exports are the ordinary ChArUco pipeline, so the outputs in `output/calibration/` are the usual `calibration_charuco.png`, `calibration_charuco.pdf`, `calibration_A4.pdf`, `board_manifest.json` and `validation_report.json`. The command prints the exact OpenCV constructor for your calibration program:
+
+```text
+OpenCV: cv2.aruco.CharucoBoard((5, 7), 0.03, 0.0225, cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250))
+```
+
+Other sizes and layouts:
+
+```bash
+./generate_calibration.sh --landscape                    # 8 x 4 squares of 30 mm on A4 landscape
+./generate_calibration.sh --square-size-mm 20            # 7 x 10 squares: more corners, closer working distance
+./generate_calibration.sh --page-size A3                 # 8 x 11 squares of 30 mm
+./generate_calibration.sh --squares 4x6 --square-size-mm 35 --output-dir output/calib_35mm
+./generate_charuco.sh validate --board calibration --manifest output/calibration/board_manifest.json --input photo.png
+```
+
+Additional options are `--marker-size-mm` (default 0.75 x square), `--dictionary`, `--first-id`, `--dpi`, `--white-margin-mm`, `--page-margin-mm`, `--clean`, `--export-svg`, `--export-dxf`, `--export-dictionary-yml` and `--allow-untested-opencv`. An explicit `--squares` grid that does not fit one sheet is rejected rather than scaled or tiled; a calibration target should be one flat piece. For manual installation or Windows, use `python generate.py calibration`.
+
+Choose squares large enough for your working distance: the photo validator warns below 5 image pixels per marker module. An **odd row count** (the default 7) gives the same layout in every OpenCV version; with an even row count, tools built on OpenCV < 4.6 need their legacy-pattern setting, and the command says so. As with every sheet here, print at **Actual size / 100%**, mount the board flat and rigid, and measure both scale bars before trusting the calibration. A uniform print-scale error leaves pixel intrinsics unchanged but scales every estimated translation, including the hand-eye and target poses, by the same factor; unequal X/Y scaling also distorts the intrinsics. Enter the measured square size, not the nominal one, if they differ.
+
 ## Vector exports for rigid targets
 
 Paper deforms; a permanent industrial reference is often machined or cut. These exports write into a `vector/` subfolder, are recorded in `manifest["exports"]` with relative paths and covered by the manifest checksums, and are deliberately **not** print files: they never appear as candidates for the stale-artifact check.
@@ -368,13 +398,15 @@ The modern `legacy_pattern=false` layout is explicitly selected. With an even nu
 
 ### Dictionary quality is recorded, not assumed
 
-Both manifests carry a `dictionary_quality` block: dictionary capacity, modules per marker, `maxCorrectionBits`, the minimum Hamming distance across the whole dictionary, and the minimum/mean distance **within the IDs actually printed**. Generation prints it:
+Both manifests carry a `dictionary_quality` block: dictionary capacity, modules per marker, `maxCorrectionBits`, the minimum Hamming distance across the whole dictionary, and the minimum/mean distance **within the IDs actually printed**. Distances are rotation-aware, because the detector matches a candidate under all four rotations, and agree with OpenCV's `maxCorrectionBits = (distance - 1) / 2`. Generation prints it:
 
 ```text
-Dictionary: capacity 100, 5x5 modules, min Hamming distance 6, distance within the IDs used: 8
+Dictionary: capacity 100, 5x5 modules, min Hamming distance 7, distance within the IDs used: 9
 ```
 
 Higher distance tolerates more bit errors before one ID can be confused with another. It is an encoding statistic only: it says nothing about print quality, camera distance or decoding success, and a bigger dictionary is not automatically better (`DICT_5X5_1000` has a lower minimum distance than `DICT_5X5_100`).
+
+Manifests written by generator 1.0.0 recorded these distances with a bit-unpacking error (for example 6 instead of 7 for `DICT_5X5_100`). `verify` recomputes them and reports the difference as a warning rather than failing such artifacts, which are otherwise unaffected.
 
 ## Mounting, identification and precision limits
 
@@ -396,7 +428,7 @@ python -m mypy               # type check of src, tests and generate.py
 python generate.py verify --manifest output/board_manifest.json
 ```
 
-Tests cover dimensions, exact IDs and placement, configuration validation and error messages, identity separation, stale-artifact refusal and `--clean`, synthetic corners, PNG sampling, PDF physical geometry and altered-scale rejection, both scale bars, annotation separation, tiling and tile verification, dictionary-quality reporting, SVG/DXF/YAML exports, alternate layouts/dictionaries/IDs, deterministic byte-for-byte output, manifest reconstruction and schema rejection, failure publication and CLI exit codes. If Poppler is installed, an integration test independently rasterizes the combined vector PDF and detects both encoded boards; the test is skipped when `pdftoppm` is unavailable and the core generator never requires Poppler. Test counts are reported by the test run itself rather than duplicated in this document.
+Tests cover dimensions, exact IDs and placement, configuration validation and error messages, identity separation, stale-artifact refusal and `--clean`, synthetic corners, PNG sampling, PDF physical geometry and altered-scale rejection, both scale bars, annotation separation, tiling and tile verification (including boards that only overflow one axis), dictionary-quality values against a brute-force rotation-aware oracle, the A4 calibration board's page fill, dictionary isolation and print-rendered detection, SVG/DXF/YAML exports, alternate layouts/dictionaries/IDs, deterministic byte-for-byte output, manifest reconstruction and schema rejection, failure publication and CLI exit codes. If Poppler is installed, an integration test independently rasterizes the combined vector PDF and detects both encoded boards; the test is skipped when `pdftoppm` is unavailable and the core generator never requires Poppler. Test counts are reported by the test run itself rather than duplicated in this document.
 
 `.github/workflows/ci.yml` runs lint, type checking, the test suite and a real generate/verify cycle on Linux, macOS and Windows for Python 3.11, 3.12 and 3.13, and installs Poppler on Linux and macOS so the vector-PDF rasterization test actually executes instead of silently skipping. A separate job builds the wheel, installs it and runs the `charuco-generator` console script, which is what proves the packaging metadata, `py.typed` and the version single-source are correct.
 

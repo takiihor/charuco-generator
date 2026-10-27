@@ -142,3 +142,24 @@ def test_unsupported_opencv_rejected(config, monkeypatch):
     monkeypatch.setattr(cv2, "__version__", "4.5.0")
     with pytest.raises(ConfigError, match=r"4\.11\.0"):
         create_board(config.geometry, config.boards[0])
+
+
+@pytest.mark.parametrize("name", ["DICT_4X4_50", "DICT_5X5_100", "DICT_6X6_250"])
+def test_dictionary_quality_matches_rotation_aware_brute_force(name):
+    from charuco_generator.config import dictionary_for, dictionary_quality
+    dictionary = dictionary_for(name)
+    size, count = dictionary.markerSize, dictionary.bytesList.shape[0]
+    # Independent oracle: decode bits from rendered marker images, not from bytesList.
+    bits = np.array([dictionary.generateImageMarker(i, size + 2, borderBits=1)[1:-1, 1:-1] // 255
+                     for i in range(count)])
+    rotations = [np.rot90(bits, turns, axes=(1, 2)).reshape(count, -1) for turns in range(4)]
+    flat = bits.reshape(count, -1)
+    distance = min(int(np.count_nonzero(flat[i] != rotated[j]))
+                   for i in range(count) for j in range(count) if i != j for rotated in rotations)
+    quality = dictionary_quality(name, [1, 2, 3])
+    assert quality["min_hamming_distance"] == distance
+    # OpenCV derives its correction capacity from the same rotation-aware distance.
+    assert quality["max_correction_bits"] == (distance - 1) // 2
+    in_use = min(int(np.count_nonzero(flat[i] != rotated[j]))
+                 for i in (1, 2, 3) for j in (1, 2, 3) if i != j for rotated in rotations)
+    assert quality["min_distance_in_use"] == in_use

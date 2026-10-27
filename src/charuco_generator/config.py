@@ -95,20 +95,27 @@ def dictionary_capacity(name: str) -> int:
 
 
 @lru_cache(maxsize=8)
-def _dictionary_packed(name: str) -> np.ndarray:
+def _dictionary_distances(name: str) -> np.ndarray:
+    """Rotation-aware Hamming distance between every pair of codewords; diagonal is int16 max.
+
+    The detector identifies a candidate under all four rotations, so two IDs are only as far
+    apart as their closest rotation. bytesList packs the rotations as channels and right-aligns
+    the last partial byte, so OpenCV's own decoder unpacks it rather than np.unpackbits.
+    """
     dictionary = dictionary_for(name)
-    bits = int(dictionary.markerSize) ** 2
-    return (np.unpackbits(np.ascontiguousarray(dictionary.bytesList), axis=2, bitorder="big")
-            .reshape(dictionary.bytesList.shape[0], -1)[:, :bits].astype(np.uint8))
-
-
-def _pairwise_distances(packed: np.ndarray) -> np.ndarray:
-    distances = np.zeros((packed.shape[0], packed.shape[0]), dtype=np.int16)
-    for index in range(packed.shape[0]):
-        distances[index] = np.count_nonzero(packed != packed[index], axis=1)
-    if packed.shape[0] > 1:
-        np.fill_diagonal(distances, np.iinfo(np.int16).max)
-    return distances
+    size = int(dictionary.markerSize)
+    count = int(dictionary.bytesList.shape[0])
+    bits = np.array([cv2.aruco.Dictionary.getBitsFromByteList(dictionary.bytesList[i:i + 1], size)
+                     for i in range(count)], dtype=np.float32).reshape(count, size, size)
+    flat = bits.reshape(count, -1)
+    distances = np.full((count, count), np.inf, dtype=np.float32)
+    for turns in range(4):
+        rotated = np.rot90(bits, turns, axes=(1, 2)).reshape(count, -1)
+        # Exact for 0/1 values: mismatches = a.(1-b) + (1-a).b
+        distances = np.minimum(distances, flat @ (1 - rotated).T + (1 - flat) @ rotated.T)
+    result = distances.astype(np.int16)
+    np.fill_diagonal(result, np.iinfo(np.int16).max)
+    return result
 
 
 def dictionary_quality(name: str, marker_ids: list[int] | None = None) -> dict:
@@ -118,18 +125,19 @@ def dictionary_quality(name: str, marker_ids: list[int] | None = None) -> dict:
     encoding statistics only: they say nothing about print quality or camera reliability.
     """
     dictionary = dictionary_for(name)
-    packed = _dictionary_packed(name)
+    distances = _dictionary_distances(name)
     result: dict[str, Any] = {
-        "capacity": int(packed.shape[0]), "marker_size": int(dictionary.markerSize),
+        "capacity": int(distances.shape[0]), "marker_size": int(dictionary.markerSize),
         "max_correction_bits": int(dictionary.maxCorrectionBits),
-        "min_hamming_distance": int(_pairwise_distances(packed).min()) if packed.shape[0] > 1 else None,
+        "min_hamming_distance": int(distances.min()) if distances.shape[0] > 1 else None,
         "ids_in_use": 0, "min_distance_in_use": None, "mean_distance_in_use": None,
-        "note": "Hamming distances between dictionary codewords; min_distance_in_use covers only the IDs this set prints.",
+        "note": "Rotation-aware Hamming distances between dictionary codewords; min_distance_in_use covers only "
+                "the IDs this set prints.",
     }
     unique = sorted(set(marker_ids or []))
     result["ids_in_use"] = len(unique)
     if len(unique) >= 2:
-        subset = _pairwise_distances(packed[unique])
+        subset = distances[np.ix_(unique, unique)]
         result["min_distance_in_use"] = int(subset.min())
         result["mean_distance_in_use"] = round(float(subset.min(axis=1).mean()), 3)
     return result

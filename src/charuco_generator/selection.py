@@ -21,6 +21,9 @@ def assign_ids(data: dict, start: int) -> None:
     geometry.validate()
     capacity = dictionary_for(geometry.dictionary).bytesList.shape[0]
     count = geometry.marker_count * len(data["boards"])
+    if count > capacity:
+        raise ConfigError(f"Need {count} distinct IDs but {geometry.dictionary} holds only {capacity}; "
+                          "use fewer or larger squares, fewer boards, or a larger dictionary")
     if type(start) is not int or start < 0 or start + count > capacity:
         raise ConfigError(f"Need {count} consecutive IDs; first ID must be 0..{capacity - count} "
                           f"for {geometry.dictionary} ({capacity} IDs)")

@@ -39,6 +39,13 @@ def _parse_ids(value: str) -> list[int]:
     return result
 
 
+def _parse_grid(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d+)\s*[x×X]\s*(\d+)", value.strip())
+    if not match or not all(2 <= int(v) <= 100 for v in match.groups()):
+        raise argparse.ArgumentTypeError("enter columns x rows, e.g. 5x7 (2..100 each)")
+    return int(match.group(1)), int(match.group(2))
+
+
 def _overrides(config, args):
     data = config.to_dict()
     for key in ("squares_x", "squares_y", "square_length_mm", "marker_length_mm", "dictionary", "legacy_pattern", "border_bits"):
@@ -163,6 +170,24 @@ def parser() -> argparse.ArgumentParser:
     aruco.add_argument("--page-margin-mm", type=float, default=10.0)
     aruco.add_argument("--output-dir", default="output/aruco")
     _add_output_flags(aruco, dictionary_export=True)
+    calib = commands.add_parser("calibration",
+                                help="Generate a standard camera calibration ChArUco board filling one A4 sheet")
+    calib.add_argument("--page-size", default="A4", help="A4 (default), A3, LETTER or WIDTHxHEIGHT in mm")
+    calib.add_argument("--landscape", action="store_true", help="Turn the page so its long side is horizontal")
+    calib.add_argument("--square-size-mm", "--square-length-mm", dest="square_length_mm", type=float, default=30.0,
+                       help="Chessboard square side (default: 30 mm, a 5 x 7 board on A4 portrait)")
+    calib.add_argument("--marker-size-mm", "--marker-length-mm", dest="marker_length_mm", type=float,
+                       help="Marker side including its black border (default: 0.75 x square)")
+    calib.add_argument("--squares", type=_parse_grid, metavar="COLSxROWS",
+                       help="Explicit grid, e.g. 5x7 (default: the largest grid that fits one sheet)")
+    calib.add_argument("--dictionary", default="DICT_6X6_250",
+                       help="Kept apart from the DICT_5X5_100 localization references by default")
+    calib.add_argument("--first-id", type=int, default=0, help="First marker ID; the rest follow consecutively")
+    calib.add_argument("--dpi", type=int, default=600)
+    calib.add_argument("--white-margin-mm", type=float, default=10.0)
+    calib.add_argument("--page-margin-mm", type=float, default=10.0)
+    calib.add_argument("--output-dir", default="output/calibration")
+    _add_output_flags(calib, dictionary_export=True)
     val = commands.add_parser("validate", help="Report marker/corner detection in a PNG or printed-board photograph")
     val.add_argument("--input", required=True)
     val.add_argument("--board", required=True)
@@ -201,6 +226,31 @@ def _aruco_branch(args) -> int:
     print(f"Dictionary: {config.dictionary}; marker size: {config.marker_length_mm:g} x {config.marker_length_mm:g} mm")
     _print_quality(report)
     print("Print the PDFs at Actual size / 100% and measure both scale bars on each panel.")
+    return 0
+
+
+def _calibration_branch(args) -> int:
+    from .calibration import BOARD_NAME, CalibrationTarget, calibration_config, opencv_board_code
+    config = calibration_config(CalibrationTarget(
+        args.page_size, args.landscape, args.square_length_mm, args.marker_length_mm, args.squares,
+        args.dictionary, args.first_id, args.dpi, args.white_margin_mm, args.page_margin_mm), args.output_dir)
+    report = generate(config, clean=args.clean, svg=args.export_svg, dxf=args.export_dxf,
+                      dictionary_file=args.export_dictionary_yml)
+    geometry, board = config.geometry, report["boards"][0]
+    width, height = geometry.pattern_mm
+    print(f"Generated a verified calibration board in {Path(config.output_dir).resolve()}")
+    print(f"  {geometry.squares_x} x {geometry.squares_y} squares of {geometry.square_length_mm:g} mm "
+          f"({width:g} x {height:g} mm), markers {geometry.marker_length_mm:g} mm, {geometry.dictionary} "
+          f"IDs {_id_label(list(config.boards[0].marker_ids))}, {config.printing.page_size.upper()} sheet")
+    print(f"  {board['detected_marker_count']} markers, {board['detected_charuco_corner_count']} ChArUco corners detected")
+    _print_quality(report)
+    print(f"  OpenCV: {opencv_board_code(config)}")
+    if geometry.squares_y % 2 == 0:
+        print("  Note: an even row count lays markers out differently in OpenCV < 4.6 (legacy pattern). "
+              "Use an odd row count or set the legacy flag in older calibration tools.")
+    print(f"Check photos: validate --board {BOARD_NAME} --manifest {Path(config.output_dir) / 'board_manifest.json'} "
+          "--input photo.png")
+    print("Print the PDF at Actual size / 100%, mount it flat and measure both scale bars before calibrating.")
     return 0
 
 
@@ -277,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "aruco":
             return _aruco_branch(args)
+        if args.command == "calibration":
+            return _calibration_branch(args)
         if args.command in ("generate", "menu"):
             return _generate_branch(args)
         if args.command == "verify":

@@ -37,8 +37,13 @@ SCALE_BAR_CLEARANCE_MM = 2.0
 MIN_REFERENCE_BAR_MM = 10.0
 MARK_LINE_WIDTH_MM = 0.2
 TICK_HALF_LENGTH_MM = 1.0
-#: Length of the short ticks that project the pattern's left/right edges into both bands.
-EDGE_MARK_MM = 4.0
+#: Length of the short ticks that project the pattern's left/right edges into both bands. They sit
+#: in the strip next to the white margin, clear of the label lines and the bar caption.
+EDGE_MARK_MM = 2.5
+#: Gap between an edge mark and the white margin, and height of the horizontal bar above the panel
+#: bottom: its ticks stay above the caption (baseline 2 mm) and below the edge marks.
+EDGE_MARK_GAP_MM = 1.0
+HORIZONTAL_BAR_Y_MM = 5.5
 #: Combined sheet names are derived from board names; long sets fall back to a digest so
 #: the published filename stays well inside the 255 byte filesystem limit.
 MAX_COMBINED_NAME_CHARS = 180
@@ -90,7 +95,7 @@ def draw_scale_marks(pdf: canvas.Canvas, panel: tuple[float, float, float, float
     x1 = x0 + width
     pdf.setLineWidth(MARK_LINE_WIDTH_MM * mm)
     line_x = px + (pw - SCALE_GUTTER_MM - horizontal_mm) / 2.0
-    line_y = py + REFERENCE_BAND_MM / 2.0 - SCALE_BAR_CLEARANCE_MM
+    line_y = py + HORIZONTAL_BAR_Y_MM
     pdf.line(line_x * mm, line_y * mm, (line_x + horizontal_mm) * mm, line_y * mm)
     for end in (line_x, line_x + horizontal_mm):
         pdf.line(end * mm, (line_y - TICK_HALF_LENGTH_MM) * mm, end * mm, (line_y + TICK_HALF_LENGTH_MM) * mm)
@@ -101,9 +106,11 @@ def draw_scale_marks(pdf: canvas.Canvas, panel: tuple[float, float, float, float
     for end in (vertical_y, vertical_y + vertical_mm):
         pdf.line((vertical_x - TICK_HALF_LENGTH_MM) * mm, end * mm,
                  (vertical_x + TICK_HALF_LENGTH_MM) * mm, end * mm)
+    bottom_mark = py + REFERENCE_BAND_MM - EDGE_MARK_GAP_MM
+    top_mark = py + ph - LABEL_BAND_MM + EDGE_MARK_GAP_MM
     for edge in (x0, x1):
-        pdf.line(edge * mm, py * mm, edge * mm, (py + EDGE_MARK_MM) * mm)
-        pdf.line(edge * mm, (py + ph - EDGE_MARK_MM) * mm, edge * mm, (py + ph) * mm)
+        pdf.line(edge * mm, (bottom_mark - EDGE_MARK_MM) * mm, edge * mm, bottom_mark * mm)
+        pdf.line(edge * mm, top_mark * mm, edge * mm, (top_mark + EDGE_MARK_MM) * mm)
 
 
 @dataclass(frozen=True)

@@ -10,10 +10,11 @@ import cv2
 
 from .config import dictionary_for
 from .render import pattern_rectangles_mm
+from .sheet import VECTOR_DIR
+
+__all__ = ["VECTOR_DIR", "export_board_files", "export_dictionary", "export_dxf", "export_svg"]
 
 DXF_VERSION = "AC1009"  # AutoCAD R12: the widest-importable dialect, closed POLYLINEs only.
-#: Subdirectory of an artifact set that holds CAD exports, so they cannot be confused with print files.
-VECTOR_DIR = "vector"
 
 
 def export_svg(path: Path, size_mm: tuple[float, float],
