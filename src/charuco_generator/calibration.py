@@ -54,7 +54,8 @@ def calibration_geometry(target: CalibrationTarget, printing: Printing) -> Geome
         raise ConfigError("square_length_mm must be a finite positive number")
     limit_w, limit_h = single_sheet_pattern_limit(printing)
     if target.squares is None:
-        squares = (min(100, math.floor(limit_w / square + 1e-9)), min(100, math.floor(limit_h / square + 1e-9)))
+        squares = (math.floor(min(100, limit_w / square + 1e-9)),
+                   math.floor(min(100, limit_h / square + 1e-9)))
         if min(squares) < MIN_SQUARES:
             raise ConfigError(
                 f"{square:g} mm squares fit only a {squares[0]} x {squares[1]} grid on a {printing.page_size} sheet; "
@@ -62,6 +63,9 @@ def calibration_geometry(target: CalibrationTarget, printing: Printing) -> Geome
                 "or smaller margins")
     else:
         squares = target.squares
+        if not isinstance(squares, (tuple, list)) or len(squares) != 2 \
+                or any(type(v) is not int or not 3 <= v <= 100 for v in squares):
+            raise ConfigError("Calibration grid must be at least 3 x 3 and at most 100 x 100 integer squares")
         if min(squares) < MIN_SQUARES:
             raise ConfigError(f"Calibration grid must be at least {MIN_SQUARES} x {MIN_SQUARES} squares")
         width, height = squares[0] * square, squares[1] * square
@@ -71,6 +75,8 @@ def calibration_geometry(target: CalibrationTarget, printing: Printing) -> Geome
                 f"the {limit_w:g} x {limit_h:g} mm one {printing.page_size} sheet holds with its margins and labels. "
                 "Omit --squares to fill the page, use smaller squares, --landscape or a larger page")
     marker = target.marker_length_mm if target.marker_length_mm is not None else round(square * MARKER_RATIO, 6)
+    if type(marker) not in (int, float) or not math.isfinite(marker) or marker <= 0:
+        raise ConfigError("marker_length_mm must be a finite positive number")
     geometry = Geometry(target.dictionary, squares[0], squares[1], float(square), float(marker), False, 1)
     geometry.validate()
     return geometry

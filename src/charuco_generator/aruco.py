@@ -352,7 +352,8 @@ def generate_aruco(config: ArucoConfig, output_dir: str | Path = "output/aruco",
     metrics = marker_raster_metrics(config)
     target = Path(output_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    clear_stale(target, set(layouts) | {f"{marker_name(i)}.png" for i in marker_ids}, clean)
+    keep = set(layouts) | {f"{marker_name(i)}.png" for i in marker_ids}
+    clear_stale(target, keep, clean, remove=False)
     dictionary = dictionary_for(config.dictionary)
     with TemporaryDirectory(prefix=".aruco-staging-", dir=target.parent) as staging:
         directory = Path(staging)
@@ -385,6 +386,7 @@ def generate_aruco(config: ArucoConfig, output_dir: str | Path = "output/aruco",
         if not report["passed"]:
             raise ValidationError(report)
         write_json(directory / "aruco_validation_report.json", report)
+        clear_stale(target, keep, clean)
         publish(directory, target, sorted(filenames | set(exports)),
                 ["aruco_manifest.json", "aruco_validation_report.json"])
         return report

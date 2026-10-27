@@ -142,3 +142,8 @@ def test_shell_launcher_from_another_directory(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "5 x 7 squares of 30 mm" in result.stdout
     assert (output / "calibration_A4.pdf").is_file()
+
+
+def test_extreme_small_square_fails_with_config_error_instead_of_overflow():
+    with pytest.raises(ConfigError):
+        calibration_config(CalibrationTarget(square_length_mm=1e-320))

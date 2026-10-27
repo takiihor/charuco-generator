@@ -405,3 +405,17 @@ def test_dictionary_quality_mismatch_from_older_generator_only_warns(artifacts):
     older = validate_artifacts(directory, dict(edited, generator_version="1.0.0"))
     assert older["passed"] and not older["quality_failures"]
     assert any("earlier formula" in warning for warning in older["warnings"])
+
+
+def test_failed_clean_generation_preserves_previous_artifacts(config, tmp_path, monkeypatch):
+    import charuco_generator.generator as generator
+    target = tmp_path / 'previous'
+    target.mkdir()
+    previous = target / 'previous_charuco.pdf'
+    previous.write_bytes(b'previous verified print')
+    def fail(*args, **kwargs):
+        raise OSError('disk full while staging')
+    monkeypatch.setattr(generator, 'render_png', fail)
+    with pytest.raises(OSError, match='disk full'):
+        generator.generate(config, target, clean=True)
+    assert previous.read_bytes() == b'previous verified print'

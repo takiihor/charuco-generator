@@ -56,6 +56,8 @@ MANIFEST_NAMES = ("board_manifest.json", "aruco_manifest.json")
 
 def _manifest_ids(path: Path) -> tuple[str, list[int]]:
     document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ConfigError("Saved manifest must contain a JSON object")
     if document.get("kind") == "aruco":
         return document["configuration"]["dictionary"], list(document["marker_ids"])
     saved = config_from_dict(document["configuration"])
