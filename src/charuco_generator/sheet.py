@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -174,9 +175,25 @@ def new_canvas(path: Path, page_mm: tuple[float, float], title: str, creator: st
     return pdf
 
 
+def _numbered_run(board_names: list[str]) -> str | None:
+    """'tank01-20' for consecutively numbered names sharing one prefix (tank01, tank02, ... tank20)."""
+    if len(board_names) < 3:
+        return None
+    parts = []
+    for name in board_names:
+        match = re.fullmatch(r"([a-z_]*[a-z_])(\d+)", name)
+        if match is None:
+            return None
+        parts.append((match.group(1), match.group(2)))
+    numbers = [int(digits) for _, digits in parts]
+    if len({prefix for prefix, _ in parts}) != 1 or numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return None
+    return f"{board_names[0]}-{parts[-1][1]}"
+
+
 def combined_pdf_name(board_names: list[str], page_size: str, digest_source: object) -> str:
     """Name a multi-board sheet, falling back to a digest when board names overflow."""
-    joined = "_".join(board_names)
+    joined = _numbered_run(board_names) or "_".join(board_names)
     if len(joined) > MAX_COMBINED_NAME_CHARS:
         digest = hashlib.sha256(
             json.dumps(digest_source, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]

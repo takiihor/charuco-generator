@@ -38,6 +38,8 @@ class CalibrationTarget:
     dpi: int = 600
     white_margin_mm: float = 10.0
     page_margin_mm: float = 10.0
+    #: Board name in the manifest and file names; distinct names keep several calibration boards apart.
+    name: str = BOARD_NAME
 
 
 def oriented_page(page_size: str, landscape: bool) -> str:
@@ -89,7 +91,7 @@ def calibration_config(target: CalibrationTarget, output_dir: str = "output/cali
     printing.validate()
     geometry = calibration_geometry(target, printing)
     data = {"schema_version": 1, "geometry": asdict(geometry), "printing": asdict(printing),
-            "output_dir": output_dir, "boards": [{"name": BOARD_NAME, "identifier": BOARD_NAME, "marker_ids": []}]}
+            "output_dir": output_dir, "boards": [{"name": target.name, "identifier": target.name, "marker_ids": []}]}
     # Consecutive IDs from first_id, with a deterministic identifier for this geometry and ID set.
     assign_ids(data, target.first_id)
     return config_from_dict(data)
